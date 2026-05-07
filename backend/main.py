@@ -192,6 +192,46 @@ def sync_obsidian_endpoint():
 
 
 # =========================================================
+# SOT GRAPH ENDPOINT
+# Returns nodes + links suitable for a force-directed graph.
+# Links are derived from shared key_concepts; weight = overlap count.
+# =========================================================
+@app.get("/api/sot/graph")
+def sot_graph():
+    data = _load_sot()
+
+    nodes = [
+        {
+            "id": e.get("event_id"),
+            "course": e.get("course"),
+            "week": e.get("week"),
+            "lesson": e.get("lesson"),
+            "summary": (e.get("summary") or "")[:280],
+            "key_concepts": e.get("key_concepts") or [],
+        }
+        for e in data
+    ]
+
+    links = []
+    for i, a in enumerate(data):
+        a_concepts = {c.lower() for c in (a.get("key_concepts") or [])}
+        if not a_concepts:
+            continue
+        for b in data[i + 1:]:
+            b_concepts = {c.lower() for c in (b.get("key_concepts") or [])}
+            shared = a_concepts & b_concepts
+            if shared:
+                links.append({
+                    "source": a.get("event_id"),
+                    "target": b.get("event_id"),
+                    "weight": len(shared),
+                    "shared": sorted(shared),
+                })
+
+    return {"nodes": nodes, "links": links}
+
+
+# =========================================================
 # QUERY ENDPOINT (READ PIPELINE)
 # =========================================================
 @app.post("/query")

@@ -3,6 +3,7 @@ import IngestPanel from "./components/IngestPanel";
 import SotBrowser from "./components/SotBrowser";
 import QuizPanel from "./components/QuizPanel";
 import ChatPanel from "./components/ChatPanel";
+import GraphPanel from "./components/GraphPanel";
 
 export default function App() {
   const [mode, setMode] = useState("ingest");
@@ -24,6 +25,7 @@ export default function App() {
       {mode === "browse" && <SotBrowser />}
       {mode === "quiz" && <QuizPanel />}
       {mode === "chat" && <ChatPanel />}
+      {mode === "graph" && <GraphPanel />}
     </div>
   );
 }
@@ -56,6 +58,9 @@ function ModeToggle({ mode, setMode }) {
       </ToggleBtn>
       <ToggleBtn active={mode === "chat"} onClick={() => setMode("chat")}>
         Chat
+      </ToggleBtn>
+      <ToggleBtn active={mode === "graph"} onClick={() => setMode("graph")}>
+        Graph
       </ToggleBtn>
     </div>
   );

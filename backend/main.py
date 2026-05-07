@@ -33,6 +33,9 @@ from api.ingestion_controller import router as ingestion_router
 # Quiz router (downstream SOT consumer)
 from api.quiz_controller import router as quiz_router
 
+# Advisor router (downstream SOT consumer — chat over SOT)
+from api.advisor_controller import router as advisor_router
+
 
 SOT_FILE = "memory_store.json"
 
@@ -60,6 +63,7 @@ app = FastAPI()
 # Register ingestion endpoint
 app.include_router(ingestion_router, prefix="/api")
 app.include_router(quiz_router, prefix="/api")
+app.include_router(advisor_router, prefix="/api")
 
 
 # =========================================================

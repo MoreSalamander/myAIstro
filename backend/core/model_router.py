@@ -16,6 +16,7 @@ the first call after switching roles can be slow.
 # -------- Generator roles --------
 SUMMARIZE = "llama3:8b"           # structured extraction of lesson content
 QUIZ_GENERATE = "llama3.2:latest"  # recall-question phrasing from SOT entries
+ADVISE = "llama3:8b"               # study advisor — long-form prose grounded in SOT
 
 # -------- Judge role --------
 GRADE = "mistral:latest"           # scores user answers; separate from generators

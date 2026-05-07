@@ -13,6 +13,7 @@ shows the selected context entries as chips.
 """
 
 import json
+import traceback
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -56,6 +57,7 @@ def advisor_chat(req: ChatRequest):
 
             yield json.dumps({"type": "done"}) + "\n"
         except Exception as e:
+            traceback.print_exc()
             yield json.dumps({"type": "error", "message": str(e)}) + "\n"
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")

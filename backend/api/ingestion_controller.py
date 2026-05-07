@@ -7,6 +7,7 @@ incrementally and lights each pipeline node as the events arrive.
 """
 
 import json
+import traceback
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -41,6 +42,9 @@ def ingest_lesson(req: LessonIngestRequest):
             for chunk in stream_ingestion_pipeline(event):
                 yield json.dumps(chunk) + "\n"
         except Exception as e:
+            # Log the full traceback to stderr (uvicorn picks this up)
+            # so streaming-pipeline failures are debuggable next time.
+            traceback.print_exc()
             yield json.dumps({"type": "error", "message": str(e)}) + "\n"
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")

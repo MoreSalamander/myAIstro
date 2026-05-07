@@ -127,11 +127,46 @@ LESSON INPUT:
     # -----------------------------
     # FINAL STANDARDIZED OUTPUT
     # -----------------------------
-    raw_blocks = parsed.get("code_blocks", []) or []
+    # The LLM occasionally violates the JSON contract — e.g. emits
+    # code_blocks as [{"language": "...", "code": "..."}] instead of
+    # ["string"]. Coerce every field to its expected shape before
+    # downstream code (validation, memory writer) touches it.
     return {
-        "summary": parsed.get("summary", ""),
-        "key_concepts": parsed.get("key_concepts", []),
-        "definitions": parsed.get("definitions", []),
-        "code_blocks": [format_code_block(b) for b in raw_blocks],
-        "generated_at": datetime.utcnow().isoformat()
+        "summary": _ensure_str(parsed.get("summary")),
+        "key_concepts": _ensure_list_of_str(parsed.get("key_concepts")),
+        "definitions": _ensure_list_of_str(parsed.get("definitions")),
+        "code_blocks": [
+            format_code_block(b)
+            for b in _ensure_list_of_str(parsed.get("code_blocks"))
+        ],
+        "generated_at": datetime.utcnow().isoformat(),
     }
+
+
+def _ensure_str(value) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        # Try common payload keys an LLM might use for the actual text.
+        for key in ("text", "content", "value", "code", "summary"):
+            v = value.get(key)
+            if isinstance(v, str):
+                return v
+        return json.dumps(value)
+    if isinstance(value, list):
+        return " ".join(_ensure_str(v) for v in value)
+    return str(value)
+
+
+def _ensure_list_of_str(value) -> list:
+    if isinstance(value, list):
+        return [_ensure_str(v) for v in value]
+    if isinstance(value, dict):
+        return [_ensure_str(v) for v in value.values()]
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if value is None:
+        return []
+    return [_ensure_str(value)]

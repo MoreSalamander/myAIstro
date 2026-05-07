@@ -13,6 +13,7 @@ import ollama
 import json
 from datetime import datetime
 
+from core.code_format import format_code_block
 from core.model_router import SUMMARIZE as MODEL
 
 
@@ -126,10 +127,11 @@ LESSON INPUT:
     # -----------------------------
     # FINAL STANDARDIZED OUTPUT
     # -----------------------------
+    raw_blocks = parsed.get("code_blocks", []) or []
     return {
         "summary": parsed.get("summary", ""),
         "key_concepts": parsed.get("key_concepts", []),
         "definitions": parsed.get("definitions", []),
-        "code_blocks": parsed.get("code_blocks", []),
+        "code_blocks": [format_code_block(b) for b in raw_blocks],
         "generated_at": datetime.utcnow().isoformat()
     }

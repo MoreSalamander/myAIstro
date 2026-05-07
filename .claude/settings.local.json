@@ -28,7 +28,8 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'{len\\(d\\)} entries:'\\); [print\\(f'  {e[\\\\\"course\\\\\"]} / week {e[\\\\\"week\\\\\"]} / {e[\\\\\"lesson\\\\\"]}'\\) for e in d]\")",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); dom = next\\(\\(e for e in d if e['lesson'] == 'The DOM, your page as a living tree'\\), None\\); print\\(json.dumps\\(dom, indent=2\\)\\)\")",
       "Bash(python3)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(.venv/bin/python -c ' *)"
     ]
   }
 }

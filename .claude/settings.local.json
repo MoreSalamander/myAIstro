@@ -23,7 +23,11 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'{len\\(d\\)} entries; lessons: {[e[\\\\\"lesson\\\\\"] for e in d]}'\\)\")",
       "Bash(git restore *)",
       "Bash(git checkout *)",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'{len\\(d\\)} entries; lessons: {[\\(e[\\\\\"course\\\\\"], e[\\\\\"lesson\\\\\"]\\) for e in d]}'\\)\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'{len\\(d\\)} entries; lessons: {[\\(e[\\\\\"course\\\\\"], e[\\\\\"lesson\\\\\"]\\) for e in d]}'\\)\")",
+      "Bash(curl -sN -X POST http://127.0.0.1:8000/api/ingest -H \"Content-Type: application/json\" -d '{\"course\":\"BE101\",\"week\":\"3\",\"lesson\":\"The DOM, your page as a living tree\",\"raw_text\":\"The DOM is a live tree of objects in the browser, built from HTML on disk. Edits in DevTools change the DOM but not the original HTML file.\"}')",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'{len\\(d\\)} entries:'\\); [print\\(f'  {e[\\\\\"course\\\\\"]} / week {e[\\\\\"week\\\\\"]} / {e[\\\\\"lesson\\\\\"]}'\\) for e in d]\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); dom = next\\(\\(e for e in d if e['lesson'] == 'The DOM, your page as a living tree'\\), None\\); print\\(json.dumps\\(dom, indent=2\\)\\)\")",
+      "Bash(python3)"
     ]
   }
 }

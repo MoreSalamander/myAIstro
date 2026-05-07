@@ -1,11 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import DataFlowCanvas from "./DataFlowCanvas";
 
-const STEP_INTERVAL_MS = 800;
-
 export default function IngestPanel() {
+  // task = { event, timeline: [completed step events] }; built up as the
+  // backend streams progress. Initialized with an empty timeline on the
+  // first request so the canvas can render the always-visible pipeline.
   const [task, setTask] = useState(null);
-  const [activeStep, setActiveStep] = useState(null);
+  const [runningStep, setRunningStep] = useState(null);
 
   const [course, setCourse] = useState("");
   const [week, setWeek] = useState("");
@@ -15,29 +16,35 @@ export default function IngestPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    if (!task?.timeline?.length) return;
-
-    setActiveStep(0);
-    const id = setInterval(() => {
-      setActiveStep((s) => {
-        const next = (s ?? -1) + 1;
-        if (next >= task.timeline.length) {
-          clearInterval(id);
-          return s;
-        }
-        return next;
-      });
-    }, STEP_INTERVAL_MS);
-
-    return () => clearInterval(id);
-  }, [task]);
+  function handleChunk(chunk) {
+    if (chunk.type === "start") {
+      setTask({ event: chunk.event, timeline: [] });
+    } else if (chunk.type === "step_start") {
+      setRunningStep(chunk.step);
+    } else if (chunk.type === "step_complete") {
+      setTask((prev) => ({
+        ...prev,
+        timeline: [...(prev?.timeline ?? []), chunk],
+      }));
+      setRunningStep(null);
+      if (
+        chunk.step === "memory_write" &&
+        (chunk.status === "written" || chunk.status === "replaced")
+      ) {
+        setLesson("");
+        setInputText("");
+      }
+    } else if (chunk.type === "error") {
+      setError(chunk.message);
+    }
+    // chunk.type === "done" — nothing extra; busy is cleared in finally
+  }
 
   async function ingestLesson() {
     setBusy(true);
     setError(null);
-    setTask(null);
-    setActiveStep(null);
+    setTask({ event: null, timeline: [] });
+    setRunningStep(null);
 
     try {
       const res = await fetch("http://127.0.0.1:8000/api/ingest", {
@@ -56,29 +63,50 @@ export default function IngestPanel() {
         throw new Error(`HTTP ${res.status}: ${body}`);
       }
 
-      const data = await res.json();
-      setTask(data);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
 
-      // Clear lesson + text only when the entry actually persisted, so a
-      // validation FAIL leaves the input intact for the user to fix.
-      const memoryStep = data.timeline?.find((s) => s.step === "memory_write");
-      if (memoryStep?.status === "written" || memoryStep?.status === "replaced") {
-        setLesson("");
-        setInputText("");
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            handleChunk(JSON.parse(line));
+          } catch (parseErr) {
+            console.warn("bad chunk:", line, parseErr);
+          }
+        }
+      }
+      if (buf.trim()) {
+        try {
+          handleChunk(JSON.parse(buf));
+        } catch {
+          /* ignore trailing partial */
+        }
       }
     } catch (e) {
       console.error(e);
       setError(e.message ?? String(e));
     } finally {
       setBusy(false);
+      setRunningStep(null);
     }
   }
 
-  const currentStep = task?.timeline?.[activeStep ?? -1] ?? null;
+  // What to surface in the side panel: the running step (with no data
+  // yet) or the most recently completed step.
+  const detailStep = runningStep
+    ? { step: runningStep, running: true }
+    : task?.timeline?.[task.timeline.length - 1] ?? null;
 
   return (
     <>
-      <DataFlowCanvas task={task} activeStep={activeStep} />
+      <DataFlowCanvas task={task} runningStep={runningStep} />
 
       <div
         style={{
@@ -155,7 +183,7 @@ export default function IngestPanel() {
         </div>
       </div>
 
-      <StepDetail step={currentStep} />
+      <StepDetail step={detailStep} />
     </>
   );
 }
@@ -190,28 +218,35 @@ function StepDetail({ step }) {
       >
         {step.step}
       </div>
-      {step.status && (
+      {step.running && (
+        <div style={{ color: "rgba(255,255,255,0.65)", fontStyle: "italic" }}>
+          running…
+        </div>
+      )}
+      {!step.running && step.status && (
         <div style={{ marginBottom: "6px" }}>
           status: <strong>{step.status}</strong>
           {typeof step.score === "number" && <> · score {step.score}</>}
         </div>
       )}
-      {step.data?.summary && (
+      {!step.running && step.data?.summary && (
         <div style={{ color: "rgba(255,255,255,0.85)" }}>
           {step.data.summary}
         </div>
       )}
-      {Array.isArray(step.data?.key_concepts) && step.data.key_concepts.length > 0 && (
-        <div style={{ marginTop: "6px", color: "rgba(255,255,255,0.6)" }}>
-          {step.data.key_concepts.join(" · ")}
-        </div>
-      )}
-      {step.errors?.length > 0 && (
+      {!step.running &&
+        Array.isArray(step.data?.key_concepts) &&
+        step.data.key_concepts.length > 0 && (
+          <div style={{ marginTop: "6px", color: "rgba(255,255,255,0.6)" }}>
+            {step.data.key_concepts.join(" · ")}
+          </div>
+        )}
+      {!step.running && step.errors?.length > 0 && (
         <div style={{ marginTop: "6px", color: "#ef4444" }}>
           {step.errors.join(" · ")}
         </div>
       )}
-      {step.warnings?.length > 0 && (
+      {!step.running && step.warnings?.length > 0 && (
         <div style={{ marginTop: "6px", color: "#f59e0b" }}>
           {step.warnings.join(" · ")}
         </div>

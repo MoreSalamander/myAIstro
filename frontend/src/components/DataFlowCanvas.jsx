@@ -1,5 +1,16 @@
 import { useEffect, useRef } from "react";
 
+// The pipeline shape is fixed: ingest → retrieval → summarization →
+// validation → memory_write. We always render these five nodes so the
+// architecture is visible even when no run is in progress.
+const PIPELINE = [
+  "ingest_received",
+  "retrieval",
+  "summarization",
+  "validation",
+  "memory_write",
+];
+
 const NODE_LABELS = {
   ingest_received: "Ingest",
   retrieval: "Retrieval",
@@ -16,16 +27,31 @@ const BASE_COLOR = {
   memory_write: "#22c55e",
 };
 
-function colorFor(step) {
-  if (!step) return "#94a3b8";
-  if (step.step === "validation" && step.status === "FAIL") return "#ef4444";
-  if (step.step === "memory_write" && step.status === "skipped") return "#94a3b8";
-  return BASE_COLOR[step.step] ?? "#94a3b8";
+function colorFor(stepName, completed) {
+  if (
+    stepName === "validation" &&
+    completed &&
+    completed.status === "FAIL"
+  ) {
+    return "#ef4444";
+  }
+  if (
+    stepName === "memory_write" &&
+    completed &&
+    completed.status === "skipped"
+  ) {
+    return "#94a3b8";
+  }
+  return BASE_COLOR[stepName] ?? "#94a3b8";
 }
 
-export default function DataFlowCanvas({ task, activeStep }) {
+export default function DataFlowCanvas({ task, runningStep }) {
   const ref = useRef(null);
-  const animRef = useRef({ progress: 0, lastStep: null });
+  const animRef = useRef({
+    edgeProgress: 0,
+    lastRunning: null,
+    pulseT: 0,
+  });
 
   useEffect(() => {
     const canvas = ref.current;
@@ -63,54 +89,63 @@ export default function DataFlowCanvas({ task, activeStep }) {
       const w = canvas.width;
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
-
       drawGrid(w, h);
 
-      const timeline = task?.timeline ?? [];
-      if (timeline.length === 0) {
-        frameId = requestAnimationFrame(draw);
-        return;
-      }
+      const timelineMap = new Map();
+      (task?.timeline ?? []).forEach((t) => {
+        if (t.step) timelineMap.set(t.step, t);
+      });
 
-      const n = timeline.length;
+      const n = PIPELINE.length;
       const nodeY = h * 0.32;
       const margin = Math.max(120, w * 0.1);
       const span = Math.max(0, w - 2 * margin);
-      const positions = timeline.map((_, i) => ({
-        x: n === 1 ? w / 2 : margin + (i * span) / (n - 1),
+      const positions = PIPELINE.map((_, i) => ({
+        x: margin + (i * span) / (n - 1),
         y: nodeY,
       }));
 
-      if (activeStep !== animRef.current.lastStep) {
-        animRef.current.progress = 0;
-        animRef.current.lastStep = activeStep;
+      // Animation refs
+      if (runningStep !== animRef.current.lastRunning) {
+        animRef.current.edgeProgress = 0;
+        animRef.current.lastRunning = runningStep;
       }
-      if (animRef.current.progress < 1) {
-        animRef.current.progress = Math.min(1, animRef.current.progress + 0.045);
+      if (runningStep && animRef.current.edgeProgress < 1) {
+        animRef.current.edgeProgress = Math.min(
+          1,
+          animRef.current.edgeProgress + 0.04,
+        );
       }
+      animRef.current.pulseT += 0.08;
 
+      const runningIdx = runningStep ? PIPELINE.indexOf(runningStep) : -1;
+
+      // Edges
       for (let i = 0; i < n - 1; i++) {
         const a = positions[i];
         const b = positions[i + 1];
-        const isActiveEdge = activeStep != null && activeStep === i + 1;
-        const isPastEdge = activeStep != null && activeStep > i + 1;
+        const targetStep = PIPELINE[i + 1];
+        const sourceCompleted = timelineMap.has(PIPELINE[i]);
+        const targetCompleted = timelineMap.has(targetStep);
+        const isRunningEdge = runningStep === targetStep && sourceCompleted;
+        const isPastEdge = sourceCompleted && targetCompleted;
 
-        ctx.lineWidth = isActiveEdge ? 2 : 1;
-        ctx.strokeStyle = isActiveEdge
-          ? colorFor(timeline[i + 1])
+        ctx.lineWidth = isRunningEdge ? 2 : 1;
+        ctx.strokeStyle = isRunningEdge
+          ? colorFor(targetStep, timelineMap.get(targetStep))
           : isPastEdge
             ? "rgba(255,255,255,0.35)"
-            : "rgba(255,255,255,0.12)";
+            : "rgba(255,255,255,0.1)";
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
         ctx.stroke();
 
-        if (isActiveEdge) {
-          const t = animRef.current.progress;
+        if (isRunningEdge) {
+          const t = animRef.current.edgeProgress;
           const px = a.x + (b.x - a.x) * t;
           const py = a.y + (b.y - a.y) * t;
-          const c = colorFor(timeline[i + 1]);
+          const c = colorFor(targetStep, null);
           ctx.beginPath();
           ctx.arc(px, py, 5, 0, Math.PI * 2);
           ctx.fillStyle = c;
@@ -121,44 +156,82 @@ export default function DataFlowCanvas({ task, activeStep }) {
         }
       }
 
-      timeline.forEach((step, i) => {
+      // Nodes
+      PIPELINE.forEach((stepName, i) => {
         const p = positions[i];
-        const isActive = activeStep === i;
-        const isPast = activeStep != null && i < activeStep;
-        const c = colorFor(step);
+        const completed = timelineMap.get(stepName);
+        const isRunning = runningStep === stepName;
+        const isComplete = !!completed;
+        const c = colorFor(stepName, completed);
+
+        let alpha;
+        let radius = 14;
+        let glow;
+
+        if (isRunning) {
+          // pulsing
+          const pulse = 0.5 + 0.5 * Math.sin(animRef.current.pulseT);
+          alpha = 0.6 + 0.35 * pulse;
+          radius = 14 + 2 * pulse;
+          glow = 22 + 14 * pulse;
+        } else if (isComplete) {
+          alpha = 0.95;
+          glow = 10;
+        } else {
+          alpha = 0.22;
+          glow = 0;
+        }
 
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
         ctx.fillStyle = c;
-        ctx.globalAlpha = isActive ? 1 : isPast ? 0.85 : 0.3;
-        ctx.shadowBlur = isActive ? 30 : isPast ? 8 : 0;
+        ctx.globalAlpha = alpha;
+        ctx.shadowBlur = glow;
         ctx.shadowColor = c;
         ctx.fill();
         ctx.shadowBlur = 0;
         ctx.globalAlpha = 1;
 
-        ctx.fillStyle = isActive ? "#ffffff" : "rgba(255,255,255,0.55)";
-        ctx.font = `${isActive ? 600 : 400} 13px system-ui`;
+        // label
+        ctx.fillStyle = isRunning || isComplete
+          ? "#ffffff"
+          : "rgba(255,255,255,0.4)";
+        ctx.font = `${isRunning || isComplete ? 600 : 400} 13px system-ui`;
         ctx.textAlign = "center";
-        ctx.fillText(NODE_LABELS[step.step] ?? step.step, p.x, p.y + 36);
+        ctx.fillText(NODE_LABELS[stepName] ?? stepName, p.x, p.y + 36);
 
-        if (step.step === "validation" && step.status) {
+        // status sub-label for validation / memory
+        if (
+          completed &&
+          stepName === "validation" &&
+          completed.status
+        ) {
           ctx.fillStyle =
-            step.status === "PASS"
+            completed.status === "PASS"
               ? "#22c55e"
-              : step.status === "FAIL"
+              : completed.status === "FAIL"
                 ? "#ef4444"
                 : "rgba(255,255,255,0.5)";
           ctx.font = "11px system-ui";
-          ctx.fillText(step.status, p.x, p.y + 52);
+          ctx.fillText(completed.status, p.x, p.y + 52);
         }
-        if (step.step === "memory_write" && step.status) {
+        if (
+          completed &&
+          stepName === "memory_write" &&
+          completed.status
+        ) {
           ctx.fillStyle =
-            step.status === "written" || step.status === "replaced"
+            completed.status === "written" ||
+            completed.status === "replaced"
               ? "#22c55e"
               : "rgba(255,255,255,0.5)";
           ctx.font = "11px system-ui";
-          ctx.fillText(step.status, p.x, p.y + 52);
+          ctx.fillText(completed.status, p.x, p.y + 52);
+        }
+        if (isRunning && !isComplete) {
+          ctx.fillStyle = "rgba(255,255,255,0.55)";
+          ctx.font = "italic 11px system-ui";
+          ctx.fillText("running…", p.x, p.y + 52);
         }
       });
 
@@ -171,7 +244,7 @@ export default function DataFlowCanvas({ task, activeStep }) {
       cancelAnimationFrame(frameId);
       window.removeEventListener("resize", resize);
     };
-  }, [task, activeStep]);
+  }, [task, runningStep]);
 
   return (
     <canvas

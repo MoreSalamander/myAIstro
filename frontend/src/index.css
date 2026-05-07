@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at center, #05060a, #000000);
+  color: white;
+  font-family: system-ui;
+}

@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/uvicorn main:app --reload --port 8000)",
+      "Bash(npm run *)",
+      "Bash(curl -sf http://127.0.0.1:8000/)",
+      "Bash(curl -sf http://127.0.0.1:5173/)",
+      "Bash(curl -s http://127.0.0.1:8000/)",
+      "Bash(ollama list *)",
+      "Bash(curl -s -X POST http://127.0.0.1:8000/api/ingest -H \"Content-Type: application/json\" -d '{\"course\":\"TEST\",\"week\":\"1\",\"lesson\":\"SmokeTest\",\"raw_text\":\"REST is an architectural style for distributed systems. It uses HTTP verbs like GET and POST.\"}')",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s -X POST http://127.0.0.1:8000/query -H \"Content-Type: application/json\" -d '{\"query\":\"REST distributed\"}')",
+      "Bash(mkdir -p /Users/0ne29/.claude/projects/-Users-0ne29-myAIstro/memory)",
+      "Bash(git init *)",
+      "Bash(git config *)"
+    ]
+  }
+}

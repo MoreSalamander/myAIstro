@@ -1,6 +1,7 @@
 import { useState } from "react";
 import IngestPanel from "./components/IngestPanel";
 import SotBrowser from "./components/SotBrowser";
+import QuizPanel from "./components/QuizPanel";
 
 export default function App() {
   const [mode, setMode] = useState("ingest");
@@ -18,7 +19,9 @@ export default function App() {
       }}
     >
       <ModeToggle mode={mode} setMode={setMode} />
-      {mode === "ingest" ? <IngestPanel /> : <SotBrowser />}
+      {mode === "ingest" && <IngestPanel />}
+      {mode === "browse" && <SotBrowser />}
+      {mode === "quiz" && <QuizPanel />}
     </div>
   );
 }
@@ -45,6 +48,9 @@ function ModeToggle({ mode, setMode }) {
       </ToggleBtn>
       <ToggleBtn active={mode === "browse"} onClick={() => setMode("browse")}>
         Browse SOT
+      </ToggleBtn>
+      <ToggleBtn active={mode === "quiz"} onClick={() => setMode("quiz")}>
+        Quiz
       </ToggleBtn>
     </div>
   );

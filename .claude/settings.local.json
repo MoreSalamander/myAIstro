@@ -22,7 +22,8 @@
       "Bash(python3 -c \"import sys,json; t=json.load\\(sys.stdin\\); print\\(json.dumps\\(t['timeline'][-1], indent=2\\)\\)\")",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'{len\\(d\\)} entries; lessons: {[e[\\\\\"lesson\\\\\"] for e in d]}'\\)\")",
       "Bash(git restore *)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'{len\\(d\\)} entries; lessons: {[\\(e[\\\\\"course\\\\\"], e[\\\\\"lesson\\\\\"]\\) for e in d]}'\\)\")"
     ]
   }
 }

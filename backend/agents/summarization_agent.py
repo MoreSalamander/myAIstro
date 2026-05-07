@@ -13,8 +13,7 @@ import ollama
 import json
 from datetime import datetime
 
-# Locked model for v1 stability
-MODEL = "llama3:8b"
+from core.model_router import SUMMARIZE as MODEL
 
 
 def summarize_lesson(raw_text: str) -> dict:

@@ -30,6 +30,9 @@ from core.memory_reader import retrieve_from_memory
 # Ingestion router (WRITE side)
 from api.ingestion_controller import router as ingestion_router
 
+# Quiz router (downstream SOT consumer)
+from api.quiz_controller import router as quiz_router
+
 
 SOT_FILE = "memory_store.json"
 
@@ -41,6 +44,7 @@ app = FastAPI()
 
 # Register ingestion endpoint
 app.include_router(ingestion_router, prefix="/api")
+app.include_router(quiz_router, prefix="/api")
 
 
 # =========================================================

@@ -5,6 +5,9 @@ export default function SotBrowser() {
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState({});
+  const [obsidian, setObsidian] = useState(null);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -20,7 +23,37 @@ export default function SotBrowser() {
 
   useEffect(() => {
     refresh();
+    loadObsidianStatus();
   }, [refresh]);
+
+  async function loadObsidianStatus() {
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/sot/obsidian-status");
+      if (!res.ok) return;
+      setObsidian(await res.json());
+    } catch {
+      /* non-critical */
+    }
+  }
+
+  async function syncObsidian() {
+    if (syncBusy) return;
+    setSyncBusy(true);
+    setSyncMsg(null);
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/sot/sync-obsidian", {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setSyncMsg(`Synced ${data.files_written} file(s) to ${data.vault_path}`);
+      loadObsidianStatus();
+    } catch (e) {
+      setSyncMsg(`Sync failed: ${e.message ?? String(e)}`);
+    } finally {
+      setSyncBusy(false);
+    }
+  }
 
   const f = filter.toLowerCase().trim();
   const visible = (entries ?? []).filter((e) => {
@@ -83,12 +116,24 @@ export default function SotBrowser() {
         {entries && (
           <div
             style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
               fontSize: 12,
               color: "rgba(255,255,255,0.45)",
               marginBottom: 10,
             }}
           >
-            {visible.length} of {entries.length} entries
+            <div>
+              {visible.length} of {entries.length} entries
+            </div>
+            <ObsidianSync
+              obsidian={obsidian}
+              onSync={syncObsidian}
+              busy={syncBusy}
+              msg={syncMsg}
+            />
           </div>
         )}
 
@@ -125,6 +170,45 @@ export default function SotBrowser() {
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+function ObsidianSync({ obsidian, onSync, busy, msg }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      {obsidian && (
+        <span
+          title={obsidian.vault_path}
+          style={{ color: "rgba(255,255,255,0.55)", fontSize: 11 }}
+        >
+          {obsidian.exists
+            ? `Vault: ${obsidian.file_count} file(s)`
+            : `Vault: not yet created`}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={onSync}
+        disabled={busy}
+        style={{
+          padding: "4px 10px",
+          background: busy ? "rgba(168,85,247,0.4)" : "rgba(168,85,247,0.18)",
+          border: "1px solid rgba(168,85,247,0.45)",
+          borderRadius: 6,
+          color: "white",
+          cursor: busy ? "wait" : "pointer",
+          fontSize: 11,
+          fontFamily: "inherit",
+        }}
+      >
+        {busy ? "Syncing…" : "Sync to Obsidian"}
+      </button>
+      {msg && (
+        <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11 }}>
+          {msg}
+        </span>
+      )}
     </div>
   );
 }

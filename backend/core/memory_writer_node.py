@@ -7,11 +7,16 @@ Behavior:
 - Validation gate: only writes if validation == PASS.
 - Upsert by (course, week, lesson) — re-ingesting the same lesson
   replaces the previous entry instead of appending a duplicate.
+- After a successful write, mirrors the SOT into the Obsidian vault
+  so the markdown view stays in sync.
 """
 
 import json
 import os
+import traceback
 from datetime import datetime
+
+from core.obsidian_export import sync_vault
 
 
 MEMORY_FILE = "memory_store.json"
@@ -68,6 +73,13 @@ def write_to_memory(event, summary_data, validation_data):
 
     with open(MEMORY_FILE, "w") as f:
         json.dump(data, f, indent=2)
+
+    # Mirror to Obsidian vault. Failures here must NOT fail the ingest —
+    # the SOT is canonical; the vault is a derived view.
+    try:
+        sync_vault(MEMORY_FILE)
+    except Exception:
+        traceback.print_exc()
 
     return {
         "status": action,

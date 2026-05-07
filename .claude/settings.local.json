@@ -30,7 +30,8 @@
       "Bash(python3)",
       "Bash(python3 -c ' *)",
       "Bash(.venv/bin/python -c ' *)",
-      "Bash(curl -sN -X POST http://127.0.0.1:8000/api/advisor/chat -H \"Content-Type: application/json\" -d '{\"query\":\"what is the difference between ul and ol in 2 sentences\"}')"
+      "Bash(curl -sN -X POST http://127.0.0.1:8000/api/advisor/chat -H \"Content-Type: application/json\" -d '{\"query\":\"what is the difference between ul and ol in 2 sentences\"}')",
+      "Bash(curl -s -X POST http://127.0.0.1:8000/api/sot/sync-obsidian)"
     ]
   }
 }

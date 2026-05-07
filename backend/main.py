@@ -11,6 +11,7 @@ This is the READ side of the system (uses memory).
 
 import json
 import os
+import traceback
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -26,6 +27,9 @@ from agents.validation_agent import validate_summary
 
 # Memory (NEW)
 from core.memory_reader import retrieve_from_memory
+
+# Obsidian vault export (one-way mirror of the SOT)
+from core.obsidian_export import sync_vault, vault_status
 
 # Ingestion router (WRITE side)
 from api.ingestion_controller import router as ingestion_router
@@ -162,7 +166,29 @@ def resummarize(req: ResummarizeRequest):
     data[idx] = entry
     _save_sot(data)
 
+    try:
+        sync_vault(SOT_FILE)
+    except Exception:
+        traceback.print_exc()
+
     return entry
+
+
+# =========================================================
+# OBSIDIAN VAULT ENDPOINTS
+# =========================================================
+@app.get("/api/sot/obsidian-status")
+def obsidian_status_endpoint():
+    return vault_status()
+
+
+@app.post("/api/sot/sync-obsidian")
+def sync_obsidian_endpoint():
+    try:
+        return sync_vault(SOT_FILE)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =========================================================

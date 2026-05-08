@@ -53,7 +53,17 @@ def sync_vault(sot_file: str = "memory_store.json") -> dict:
 
 def export_all(entries: List[Dict]) -> List[Path]:
     VAULT_PATH.mkdir(parents=True, exist_ok=True)
-    return [_write_one(e, entries) for e in entries]
+    written = [_write_one(e, entries) for e in entries]
+
+    # Clean up vault files whose entry has been deleted from the SOT.
+    # Without this, deleting an entry leaves a stale .md hanging around
+    # and Obsidian's graph view shows orphaned nodes.
+    expected = {p.name for p in written}
+    for p in VAULT_PATH.glob("*.md"):
+        if p.name not in expected:
+            p.unlink()
+
+    return written
 
 
 def vault_status() -> dict:

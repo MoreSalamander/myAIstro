@@ -21,8 +21,18 @@ from core.model_router import SUMMARIZE as MODEL
 # Lesson length above which a single Ollama call won't fit in the model's
 # 8k context window once you include the prompt + output budget. We chunk
 # anything larger and merge the partial summaries.
-CHUNK_THRESHOLD_CHARS = 7000
-CHUNK_TARGET_CHARS = 6000
+#
+# Math: num_ctx=8192, num_predict=3072 → ~4400 tokens for input (prompt
+# template ~700 tokens + lesson ~3700 tokens). At ~4 chars/token that's
+# ~14k lesson chars. Threshold at 14k keeps a buffer.
+#
+# Set conservatively in early development at 7000, which sent normal
+# lessons through chunking unnecessarily — and chunking itself reliably
+# loses key_concepts (each chunk's model call sees a fragment and skips
+# concept extraction). Lessons under the threshold take the one-shot
+# path which is more reliable.
+CHUNK_THRESHOLD_CHARS = 14000
+CHUNK_TARGET_CHARS = 12000
 
 
 def summarize_lesson(raw_text: str) -> dict:

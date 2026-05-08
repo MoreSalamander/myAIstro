@@ -114,6 +114,13 @@ LESSON:
             "code_blocks": [],
         }
 
+    # If the model wrapped its real output inside the outer summary
+    # (recursive "Here is the JSON…" pattern), pull fields out of the
+    # nested response too. Without this, the outer's empty fields
+    # (typically code_blocks) win even though the real code is sitting
+    # in the nested JSON.
+    parsed = _enrich_from_nested(parsed)
+
     # -----------------------------
     # FINAL STANDARDIZED OUTPUT
     # -----------------------------
@@ -131,6 +138,59 @@ LESSON:
         ],
         "generated_at": datetime.utcnow().isoformat(),
     }
+
+
+def _enrich_from_nested(parsed: dict) -> dict:
+    """
+    When the model emits a recursive output (its real JSON wrapped
+    inside an outer JSON whose `summary` value is the prose preamble +
+    inner JSON text), pull whichever fields the outer is missing out of
+    the inner response.
+
+    Outer's `summary` always loses to inner (the outer summary IS the
+    wrapper text). Outer's lists win when non-empty; otherwise we take
+    the inner list.
+    """
+    if not isinstance(parsed, dict):
+        return parsed
+    summary_text = parsed.get("summary")
+    if not isinstance(summary_text, str):
+        return parsed
+    # Only run if the summary actually looks wrapped.
+    if "Here is the JSON" not in summary_text and '"summary"' not in summary_text:
+        return parsed
+
+    stripped = summary_text.strip()
+    for p in _NESTED_PREFIXES:
+        if stripped.startswith(p):
+            stripped = stripped[len(p):].lstrip()
+            break
+
+    inner = None
+    if stripped.startswith("{") or stripped.startswith("```"):
+        inner = _parse_or_repair(stripped)
+
+    if not isinstance(inner, dict):
+        return parsed
+
+    out = dict(parsed)
+
+    inner_summary = inner.get("summary")
+    if isinstance(inner_summary, str) and inner_summary.strip():
+        out["summary"] = inner_summary
+
+    for key in ("key_concepts", "definitions", "code_blocks"):
+        outer_v = parsed.get(key)
+        inner_v = inner.get(key)
+        outer_nonempty = isinstance(outer_v, list) and len(outer_v) > 0
+        inner_nonempty = isinstance(inner_v, list) and len(inner_v) > 0
+        if not outer_nonempty and inner_nonempty:
+            out[key] = inner_v
+
+    # Inner could itself be wrapped — recurse, depth-bounded.
+    if "Here is the JSON" in (out.get("summary") or "") or '"summary"' in (out.get("summary") or ""):
+        return _enrich_from_nested(out)
+    return out
 
 
 _NESTED_PREFIXES = (

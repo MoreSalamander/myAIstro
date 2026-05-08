@@ -85,12 +85,16 @@ LESSON INPUT:
     # -----------------------------
     # CALL LLM
     # -----------------------------
-    # format="json" forces Ollama into JSON mode (no truncated braces).
-    # num_predict lifts the output token cap so long lessons fit.
-    # low temperature keeps output deterministic per the contract.
+    # Note: NOT using format="json". The grammar-constrained mode
+    # consistently bailed mid-output on llama3:8b for lessons containing
+    # HTML/JSX in code blocks (observed reliably on "HTML forms and user
+    # input" — model stopped right after emitting "<form>" inside a code
+    # string). Letting the model generate freely + parsing/repairing
+    # afterward produces complete output for those lessons. The prompt
+    # below still demands strict JSON, and _parse_or_repair handles any
+    # rough edges.
     response = ollama.chat(
         model=MODEL,
-        format="json",
         messages=[
             {
                 "role": "user",
@@ -98,11 +102,6 @@ LESSON INPUT:
             }
         ],
         options={
-            # Ollama's default num_ctx (often 2048) silently truncates long
-            # lessons. 8192 fits the entire input plus a generous output
-            # budget for verbose lessons (the "HTML forms and user input"
-            # lesson at 9999 chars overflowed 1536 tokens of output, leaving
-            # the JSON object unclosed and tripping the fallback path).
             "num_ctx": 8192,
             "num_predict": 3072,
             "temperature": 0.1,

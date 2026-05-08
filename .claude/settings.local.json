@@ -33,7 +33,8 @@
       "Bash(curl -sN -X POST http://127.0.0.1:8000/api/advisor/chat -H \"Content-Type: application/json\" -d '{\"query\":\"what is the difference between ul and ol in 2 sentences\"}')",
       "Bash(curl -s -X POST http://127.0.0.1:8000/api/sot/sync-obsidian)",
       "Bash(curl -s http://127.0.0.1:8000/api/sot/graph)",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f\\\\\"nodes: {len\\(d['nodes']\\)}, links: {len\\(d['links']\\)}\\\\\"\\); print\\('top links:'\\); [print\\(f\\\\\"  {l['weight']:>2} shared: {l['shared'][:3]}\\\\\"\\) for l in sorted\\(d['links'], key=lambda x: -x['weight']\\)[:5]]\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f\\\\\"nodes: {len\\(d['nodes']\\)}, links: {len\\(d['links']\\)}\\\\\"\\); print\\('top links:'\\); [print\\(f\\\\\"  {l['weight']:>2} shared: {l['shared'][:3]}\\\\\"\\) for l in sorted\\(d['links'], key=lambda x: -x['weight']\\)[:5]]\")",
+      "Bash(.venv/bin/python)"
     ]
   }
 }

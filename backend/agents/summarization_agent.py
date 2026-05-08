@@ -133,6 +133,20 @@ LESSON:
     }
 
 
+_NESTED_PREFIXES = (
+    "Here is the JSON object summarizing the lesson:",
+    "Here is the JSON object:",
+    "Here's the JSON object:",
+    "Here is the JSON:",
+    "Here's the JSON:",
+)
+
+# Find the first "summary": "<value>" — value tolerates escaped quotes.
+_NESTED_SUMMARY_RE = re.compile(
+    r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)"', re.DOTALL
+)
+
+
 def _unwrap_nested_summary(text: str, depth: int = 0) -> str:
     """
     Sometimes the model emits a `summary` value that itself contains
@@ -141,19 +155,47 @@ def _unwrap_nested_summary(text: str, depth: int = 0) -> str:
     out fine, but the summary string is full of JSON markup. Validation
     correctly rejects it.
 
-    If the summary text looks like nested JSON, peel it open and use
-    the *inner* summary instead. Bounded depth so we can't loop.
+    Strategy:
+      1. Strip a known "Here is the JSON…" prefix.
+      2. If the remaining text starts with `{`, try _parse_or_repair
+         and use its inner `summary` value.
+      3. As a last resort, regex-extract the first "summary": "..." pair
+         in the text (handles cases where the inner JSON is too mangled
+         to repair structurally but the substring is intact).
+      4. Recurse, bounded by depth.
     """
     if not text or depth > 3:
         return text
-    if '"summary"' not in text and "'summary'" not in text:
-        return text
 
-    nested = _parse_or_repair(text)
-    if isinstance(nested, dict):
-        inner = nested.get("summary")
-        if isinstance(inner, str) and inner.strip() and inner != text:
-            return _unwrap_nested_summary(inner, depth + 1)
+    stripped = text.strip()
+
+    # Strip preamble.
+    for p in _NESTED_PREFIXES:
+        if stripped.startswith(p):
+            stripped = stripped[len(p):].lstrip()
+            break
+
+    # If we now have JSON-shaped content, parse + use inner summary.
+    if stripped.startswith("{") or stripped.startswith("```"):
+        nested = _parse_or_repair(stripped)
+        if isinstance(nested, dict):
+            inner = nested.get("summary")
+            if isinstance(inner, str) and inner.strip() and inner != text:
+                return _unwrap_nested_summary(inner, depth + 1)
+
+    # Regex fallback: works when inner JSON is malformed enough that
+    # _parse_or_repair gives up but the "summary": "..." pair is intact.
+    if '"summary"' in text:
+        m = _NESTED_SUMMARY_RE.search(text)
+        if m:
+            inner_raw = m.group(1)
+            try:
+                inner = json.loads('"' + inner_raw + '"')
+            except json.JSONDecodeError:
+                inner = inner_raw
+            if isinstance(inner, str) and inner.strip() and inner != text:
+                return _unwrap_nested_summary(inner, depth + 1)
+
     return text
 
 

@@ -12,6 +12,7 @@ Key rule:
 import ollama
 import json
 import re
+import sys
 from datetime import datetime
 
 from core.code_format import format_code_block
@@ -142,6 +143,20 @@ LESSON:
         format_code_block(b)
         for b in _ensure_list_of_str(parsed.get("code_blocks"))
     ]
+
+    # Diagnostic: when the model returns no key_concepts on a substantive
+    # lesson, dump the raw response so we can see why. The validation
+    # FAIL log only shows the parsed summary preview — that doesn't tell
+    # us how the model emitted the concepts (or didn't).
+    parsed_concepts = _ensure_list_of_str(parsed.get("key_concepts"))
+    if not parsed_concepts and len(raw_text) >= 200:
+        print(
+            f"[summarize empty key_concepts] raw response ({len(output_text)} chars):\n"
+            f"  {output_text[:800]!r}\n"
+            f"  ... (truncated)" if len(output_text) > 800 else "",
+            file=sys.stderr,
+            flush=True,
+        )
     # The model often misses code that's embedded inline (no ```fence)
     # — e.g. a "Html\n\n<!DOCTYPE html>...</html>" block in the lesson.
     # Deterministic extraction over raw_text catches those, and the

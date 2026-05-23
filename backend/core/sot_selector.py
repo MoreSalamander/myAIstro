@@ -43,6 +43,21 @@ STOPWORDS = {
 
 
 def select_relevant_entries(query: str) -> List[Dict]:
+    """
+    Return up to N SOT entries most relevant to the query.
+
+    The selection strategy mirrors how a human would scan their notes:
+    if the query names a specific course or week, jump straight there.
+    Otherwise score by keyword overlap and keep the top matches.
+
+    Returns
+    -------
+    List[Dict]
+        Matched SOT entries, max MAX_BY_METADATA (12) for the course/
+        week filter path, or MAX_BY_KEYWORDS (6) for the keyword
+        path. Empty list if nothing matched and no tokens survived
+        stopword filtering.
+    """
     sot = _load_sot()
     if not sot:
         return []

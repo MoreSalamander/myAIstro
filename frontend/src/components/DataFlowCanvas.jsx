@@ -1,3 +1,26 @@
+/**
+ * DataFlowCanvas — animated visualization of the ingestion pipeline.
+ *
+ * Rendered inside IngestPanel during ingest. Draws the five pipeline
+ * nodes (ingest_received → retrieval → summarization → validation →
+ * memory_write) as glowing dots connected by lines. Each node lights
+ * up as the backend's NDJSON stream reports that stage completed.
+ *
+ * The pipeline shape is always rendered, even when no run is in
+ * progress, so the architecture is visible to the user as a "this is
+ * the road your lesson is about to travel" preview. During a run, the
+ * `runningStep` prop drives a pulse animation on the active node and
+ * a flowing dash along the link feeding into it.
+ *
+ * On a failed validation, the validation node renders red and the
+ * `memory_write` node renders muted (skipped). The user sees exactly
+ * where their ingest stopped.
+ *
+ * @param {object} props
+ * @param {object} [props.task]         {event, timeline} of completed steps
+ * @param {string} [props.runningStep]  Currently-active stage name (drives pulse)
+ */
+
 import { useEffect, useRef } from "react";
 
 // The pipeline shape is fixed: ingest → retrieval → summarization →

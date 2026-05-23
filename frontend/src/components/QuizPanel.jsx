@@ -1,16 +1,41 @@
-import { useState, useEffect, useCallback } from "react";
+/**
+ * QuizPanel — recall-test surface over the SOT.
+ *
+ * Flow:
+ *   1. Pick a lesson (or land here with one preset via `presetEventId`)
+ *   2. POST /api/quiz/generate → llama3.2 produces one open-ended
+ *      recall question from that lesson's content
+ *   3. User types their answer
+ *   4. POST /api/quiz/grade → mistral grades the answer 0-100 against
+ *      the same SOT entry, with correct/missed-points breakdown and
+ *      one-or-two-sentence feedback
+ *
+ * The grader is mistral specifically because of the LLM-as-judge
+ * separation principle: the model that generated the question is
+ * never the model that grades the answer. See core/model_router.py.
+ *
+ * Phase state machine: "loading_q" → "answering" → "grading" → "graded".
+ *
+ * @param {object} props
+ * @param {string} [props.presetEventId]  If set, jumps straight to that
+ *                                        lesson and auto-generates the
+ *                                        first question on mount.
+ */
 
-export default function QuizPanel() {
+import { useState, useEffect, useCallback, useRef } from "react";
+
+export default function QuizPanel({ presetEventId } = {}) {
   const [entries, setEntries] = useState(null);
   const [error, setError] = useState(null);
   const [active, setActive] = useState(null);
+  const presetFiredRef = useRef(false);
   // active shape: { entry, question, userAnswer, grade, phase }
   // phase: "loading_q" | "answering" | "grading" | "graded"
 
   const loadEntries = useCallback(async () => {
     setError(null);
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/sot");
+      const res = await fetch("/api/sot");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setEntries(data);
@@ -23,10 +48,10 @@ export default function QuizPanel() {
     loadEntries();
   }, [loadEntries]);
 
-  async function startQuiz(entry) {
+  const startQuiz = useCallback(async (entry) => {
     setActive({ entry, question: null, userAnswer: "", grade: null, phase: "loading_q" });
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/quiz/question", {
+      const res = await fetch("/api/quiz/question", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ event_id: entry.event_id }),
@@ -50,13 +75,24 @@ export default function QuizPanel() {
         errorMessage: e.message ?? String(e),
       });
     }
-  }
+  }, []);
+
+  // Auto-start when a presetEventId is provided (e.g., launched from
+  // the lesson drawer). Only fires once per mount.
+  useEffect(() => {
+    if (!presetEventId || !entries || presetFiredRef.current) return;
+    const target = entries.find((e) => e.event_id === presetEventId);
+    if (target) {
+      presetFiredRef.current = true;
+      startQuiz(target);
+    }
+  }, [presetEventId, entries, startQuiz]);
 
   async function submitAnswer() {
     if (!active || !active.userAnswer.trim()) return;
     setActive((prev) => ({ ...prev, phase: "grading" }));
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/quiz/grade", {
+      const res = await fetch("/api/quiz/grade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

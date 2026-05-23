@@ -1,6 +1,30 @@
-import { useState, useEffect, useCallback } from "react";
+/**
+ * SotBrowser — the List view of the SOT.
+ *
+ * Renders every canonical entry as an expandable card showing the
+ * structured summary, key concepts, definitions, code blocks, and the
+ * original raw text. The reference layer of the app — meant for direct
+ * reading rather than chat/quiz/teach interaction.
+ *
+ * Three secondary features wired in here:
+ *   - Live filter (course / lesson / summary / key concepts substring)
+ *   - Re-summarize button (per-card, write-password gated) that POSTs
+ *     to /api/sot/resummarize and re-renders the card in place
+ *   - Obsidian vault sync — manual trigger from the toolbar, with
+ *     a status pill showing the last sync time
+ *
+ * The cards are deep-linkable: scroll-into-view by `event_id` when
+ * navigated to from elsewhere in the app.
+ *
+ * @param {object} props
+ * @param {number} [props.dataVersion]  Bumped by the parent after each
+ *                                      successful ingest; triggers re-fetch.
+ */
 
-export default function SotBrowser() {
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { writeFetch } from "../lib/writeAuth";
+
+export default function SotBrowser({ dataVersion = 0 } = {}) {
   const [entries, setEntries] = useState(null);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("");
@@ -8,11 +32,12 @@ export default function SotBrowser() {
   const [obsidian, setObsidian] = useState(null);
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
+  const cardRefs = useRef({});
 
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/sot");
+      const res = await fetch("/api/sot");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setEntries(data);
@@ -24,11 +49,11 @@ export default function SotBrowser() {
   useEffect(() => {
     refresh();
     loadObsidianStatus();
-  }, [refresh]);
+  }, [refresh, dataVersion]);
 
   async function loadObsidianStatus() {
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/sot/obsidian-status");
+      const res = await fetch("/api/sot/obsidian-status");
       if (!res.ok) return;
       setObsidian(await res.json());
     } catch {
@@ -41,7 +66,7 @@ export default function SotBrowser() {
     setSyncBusy(true);
     setSyncMsg(null);
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/sot/sync-obsidian", {
+      const res = await writeFetch("/api/sot/sync-obsidian", {
         method: "POST",
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -54,6 +79,27 @@ export default function SotBrowser() {
       setSyncBusy(false);
     }
   }
+
+  // Precompute lowercased concept sets once per entries change so the
+  // related-lookup inside each expanded card is cheap.
+  const conceptIndex = useMemo(() => {
+    const idx = new Map();
+    for (const e of entries ?? []) {
+      idx.set(
+        e.event_id,
+        new Set((e.key_concepts ?? []).map((c) => c.toLowerCase())),
+      );
+    }
+    return idx;
+  }, [entries]);
+
+  const focusEntry = useCallback((eventId) => {
+    setExpanded((prev) => ({ ...prev, [eventId]: true }));
+    requestAnimationFrame(() => {
+      const el = cardRefs.current[eventId];
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, []);
 
   const f = filter.toLowerCase().trim();
   const visible = (entries ?? []).filter((e) => {
@@ -71,7 +117,7 @@ export default function SotBrowser() {
       style={{
         position: "absolute",
         inset: 0,
-        paddingTop: 80,
+        paddingTop: 24,
         paddingBottom: 24,
         paddingLeft: 24,
         paddingRight: 24,
@@ -86,15 +132,25 @@ export default function SotBrowser() {
             placeholder="Filter by course, lesson, summary, or concept…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
+            onFocus={(e) => {
+              e.target.style.borderColor = "var(--accent-soft)";
+              e.target.style.boxShadow = "0 0 16px var(--accent-glow)";
+            }}
+            onBlur={(e) => {
+              e.target.style.borderColor = "var(--border-strong)";
+              e.target.style.boxShadow = "none";
+            }}
             style={{
               flex: 1,
               padding: "10px 14px",
-              background: "rgba(255,255,255,0.05)",
-              border: "1px solid rgba(255,255,255,0.15)",
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid var(--border-strong)",
               borderRadius: 8,
-              color: "white",
+              color: "var(--text)",
               outline: "none",
-              fontSize: 14,
+              fontSize: 13,
+              fontFamily: "var(--font-mono)",
+              transition: "border-color 0.15s, box-shadow 0.2s",
             }}
           />
           <button
@@ -154,6 +210,13 @@ export default function SotBrowser() {
             key={entry.event_id}
             entry={entry}
             expanded={!!expanded[entry.event_id]}
+            allEntries={entries ?? []}
+            conceptIndex={conceptIndex}
+            onJumpTo={focusEntry}
+            registerRef={(el) => {
+              if (el) cardRefs.current[entry.event_id] = el;
+              else delete cardRefs.current[entry.event_id];
+            }}
             onToggle={() =>
               setExpanded((prev) => ({
                 ...prev,
@@ -213,15 +276,54 @@ function ObsidianSync({ obsidian, onSync, busy, msg }) {
   );
 }
 
-function EntryCard({ entry, expanded, onToggle, onUpdate }) {
+const RELATED_LIMIT = 5;
+
+function computeRelated(entry, allEntries, conceptIndex) {
+  const my = conceptIndex.get(entry.event_id);
+  if (!my || my.size === 0) return [];
+  const scored = [];
+  for (const other of allEntries) {
+    if (other.event_id === entry.event_id) continue;
+    const theirs = conceptIndex.get(other.event_id);
+    if (!theirs || theirs.size === 0) continue;
+    const shared = [];
+    for (const c of my) if (theirs.has(c)) shared.push(c);
+    if (shared.length === 0) continue;
+    scored.push({ entry: other, shared, score: shared.length });
+  }
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    // Tiebreak: prefer same course, then same week
+    const sameCourseA = a.entry.course === entry.course ? 1 : 0;
+    const sameCourseB = b.entry.course === entry.course ? 1 : 0;
+    if (sameCourseA !== sameCourseB) return sameCourseB - sameCourseA;
+    return (a.entry.lesson || "").localeCompare(b.entry.lesson || "");
+  });
+  return scored.slice(0, RELATED_LIMIT);
+}
+
+function EntryCard({
+  entry,
+  expanded,
+  allEntries,
+  conceptIndex,
+  onJumpTo,
+  registerRef,
+  onToggle,
+  onUpdate,
+}) {
   const [resumState, setResumState] = useState({ busy: false, error: null });
+  const related = useMemo(
+    () => (expanded ? computeRelated(entry, allEntries, conceptIndex) : []),
+    [expanded, entry, allEntries, conceptIndex],
+  );
 
   async function resummarize(e) {
     e.stopPropagation();
     if (resumState.busy) return;
     setResumState({ busy: true, error: null });
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/sot/resummarize", {
+      const res = await writeFetch("/api/sot/resummarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ event_id: entry.event_id }),
@@ -244,6 +346,7 @@ function EntryCard({ entry, expanded, onToggle, onUpdate }) {
 
   return (
     <div
+      ref={registerRef}
       onClick={onToggle}
       style={{
         background: "rgba(8,10,16,0.7)",
@@ -334,6 +437,20 @@ function EntryCard({ entry, expanded, onToggle, onUpdate }) {
               ))}
             </Section>
           )}
+          {related.length > 0 && (
+            <Section label="related lessons">
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {related.map(({ entry: other, shared }) => (
+                  <RelatedChip
+                    key={other.event_id}
+                    entry={other}
+                    shared={shared}
+                    onJump={() => onJumpTo(other.event_id)}
+                  />
+                ))}
+              </div>
+            </Section>
+          )}
           {entry.raw_text && <RawLessonSection rawText={entry.raw_text} />}
           <div
             style={{
@@ -351,13 +468,17 @@ function EntryCard({ entry, expanded, onToggle, onUpdate }) {
                 disabled={resumState.busy}
                 style={{
                   padding: "6px 10px",
-                  background: resumState.busy ? "rgba(59,130,246,0.4)" : "rgba(59,130,246,0.18)",
-                  border: "1px solid rgba(59,130,246,0.45)",
+                  background: resumState.busy
+                    ? "rgba(57,255,20,0.32)"
+                    : "var(--accent-bg)",
+                  border: "1px solid var(--accent-soft)",
                   borderRadius: 6,
-                  color: "white",
+                  color: "var(--accent)",
                   cursor: resumState.busy ? "wait" : "pointer",
-                  fontSize: 12,
-                  fontFamily: "inherit",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono)",
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
                 }}
               >
                 {resumState.busy ? "Re-summarizing…" : "Re-summarize"}
@@ -399,6 +520,61 @@ function EntryCard({ entry, expanded, onToggle, onUpdate }) {
         </div>
       )}
     </div>
+  );
+}
+
+function RelatedChip({ entry, shared, onJump }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onJump();
+      }}
+      style={{
+        textAlign: "left",
+        background: "rgba(255,255,255,0.03)",
+        border: "1px solid rgba(255,255,255,0.1)",
+        borderRadius: 6,
+        padding: "8px 10px",
+        cursor: "pointer",
+        color: "white",
+        fontFamily: "inherit",
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "rgba(57,255,20,0.06)";
+        e.currentTarget.style.borderColor = "rgba(57,255,20,0.35)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "rgba(255,255,255,0.03)";
+        e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <span
+          style={{
+            fontSize: 10,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            color: "rgba(255,255,255,0.45)",
+          }}
+        >
+          {entry.course} · w{entry.week}
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 500 }}>{entry.lesson}</span>
+      </div>
+      <div
+        style={{
+          fontSize: 11,
+          color: "rgba(57,255,20,0.75)",
+        }}
+      >
+        shared: {shared.join(" · ")}
+      </div>
+    </button>
   );
 }
 

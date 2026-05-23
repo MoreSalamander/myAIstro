@@ -1,7 +1,43 @@
+/**
+ * ChatPanel — the chat surface for both my-AI-stro Chat and General Chat.
+ *
+ * One component, two modes:
+ *   - "advisor" (default): SOT-grounded chat. POSTs to /api/advisor/chat.
+ *     The backend selects relevant SOT entries via sot_selector, builds
+ *     a grounded prompt, and streams llama3.2 tokens. The first NDJSON
+ *     event is a `context` payload listing which entries were matched —
+ *     surfaced to the user so they can see what the advisor is reading
+ *     from.
+ *   - "general":           Untethered chat. POSTs to /api/chat/general.
+ *     No SOT context. Routes to llama3.2 (NOT the summarization model;
+ *     see core/model_router.py for the trust-isolation rule).
+ *
+ * Streaming: both endpoints return NDJSON. Each `{type: "token", value}`
+ * event appends to the response state, and the panel auto-scrolls so the
+ * latest token is always visible.
+ *
+ * @param {object} props
+ * @param {object} [props.seedLesson]  Optional lesson to pre-seed the query
+ *                                     ("Tell me more about <lesson>") when
+ *                                     opened from a LessonDrawer.
+ * @param {string} [props.mode]        "advisor" | "general" (default: "advisor")
+ */
+
 import { useEffect, useRef, useState } from "react";
 
-export default function ChatPanel() {
-  const [query, setQuery] = useState("");
+export default function ChatPanel({ seedLesson, mode = "advisor" } = {}) {
+  const isGeneral = mode === "general";
+  const endpoint = isGeneral
+    ? "/api/chat/general"
+    : "/api/advisor/chat";
+  const placeholder = isGeneral
+    ? "Ask anything — this chat is unconnected to your SOT."
+    : "Ask your SOT… e.g. write me a study guide for BE101 week 2";
+  const [query, setQuery] = useState(
+    !isGeneral && seedLesson?.lesson
+      ? `Tell me more about "${seedLesson.lesson}". `
+      : "",
+  );
   const [response, setResponse] = useState("");
   const [contextEntries, setContextEntries] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -27,7 +63,7 @@ export default function ChatPanel() {
     setContextEntries([]);
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/advisor/chat", {
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: q }),
@@ -119,7 +155,7 @@ export default function ChatPanel() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Ask your SOT… e.g. write me a study guide for BE101 week 2"
+          placeholder={placeholder}
           rows={3}
           style={{
             padding: "10px 14px",
@@ -179,7 +215,7 @@ export default function ChatPanel() {
           </div>
         )}
 
-        {contextEntries.length > 0 && (
+        {!isGeneral && contextEntries.length > 0 && (
           <ContextChips entries={contextEntries} />
         )}
 

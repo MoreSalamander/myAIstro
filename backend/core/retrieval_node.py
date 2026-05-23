@@ -1,35 +1,44 @@
+"""
+Retrieval Node — stage 2 of the ingestion pipeline.
+
+Converts the typed `GraphEvent` from graph_entry into a normalized
+context dict that summarization + validation consume. Pure data
+shaping; no LLM, no inference, no I/O.
+
+In the current pipeline this is essentially a pass-through that lifts
+the raw_text out of the event's payload alongside identity fields
+(course, week, lesson). Kept as a distinct pipeline stage because:
+
+  1. It gives the streaming pipeline a clear event boundary to emit
+     `step_complete` for, so the UI's data-flow canvas can light up
+     the retrieval node even though the work here is light.
+  2. It's the natural place for future context-aware ingestion (e.g.
+     conditioning summarization on related SOT entries, or pulling
+     in prior versions of the same lesson). When that lands, this
+     stage becomes substantive without disturbing the pipeline shape.
+"""
+
 from datetime import datetime
 
 
 def build_retrieval_context(event):
     """
-    ============================================
-    RETRIEVAL NODE (v1 - SIMPLE / DETERMINISTIC)
-    ============================================
+    Build the retrieval-context dict the downstream stages consume.
 
-    Purpose:
-    --------
-    This node converts a raw ingestion event into a
-    structured, normalized context object that downstream
-    nodes (summarization, validation, memory) can rely on.
+    Returns a dict with:
+      - course/week/lesson  : identity fields lifted from the event
+      - source_text         : the raw lesson text summarization reads
+      - retrieval_key       : (course:week:lesson) lowercased
+      - context_signature   : identity terms space-joined, lowercased
+      - timestamp           : when this stage ran
+      - source_event_id     : trace identifier from the originating event
 
-    IMPORTANT DESIGN RULE:
-    ----------------------
-    - NO LLM usage here
-    - NO inference
-    - ONLY deterministic transformation
-    - This is a "data shaping" layer, not intelligence
+    Raises ValueError if the event is missing — fails fast so the
+    pipeline doesn't try to summarize against nothing.
     """
-
-    # -------------------------------------------------
-    # SAFETY CHECK: ensure event exists
-    # -------------------------------------------------
     if not event:
         raise ValueError("Retrieval node received empty event")
 
-    # -------------------------------------------------
-    # Extract payload safely
-    # -------------------------------------------------
     payload = getattr(event, "payload", {})
 
     course = payload.get("course", "").strip()

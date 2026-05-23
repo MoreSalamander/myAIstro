@@ -1,3 +1,16 @@
+"""
+Memory Reader — read-side of the SOT for the legacy `/query` endpoint.
+
+A keyword-overlap retrieval pass over the SOT. NOT the modern advisor
+path — the Advisor uses `core/sot_selector.py` for relevance ranking
+and reads canonical entries only. This module is kept for the demo
+/query endpoint and as the simplest possible reference implementation
+of "retrieve from the SOT."
+
+No LLM, no embeddings. Just lowercased token overlap between the
+query and each entry's summary.
+"""
+
 import json
 import os
 from typing import List, Dict
@@ -7,16 +20,14 @@ MEMORY_FILE = "memory_store.json"
 
 def retrieve_from_memory(query: str) -> List[Dict]:
     """
-    ======================================================
-    MEMORY READER (v2)
-    ======================================================
+    Return SOT entries whose summary contains any query token.
 
-    Reads validated entries from memory_store.json and
-    returns those whose `summary` overlaps with any token
-    in the query.
+    Loose semantics on purpose — the legacy `/query` endpoint wants
+    a permissive recall surface, not precision. The Advisor's
+    `core/sot_selector.py` is the modern path that ranks for quality.
 
-    Falls back to an empty list if the store is missing
-    or unreadable.
+    Returns [] if the SOT file is missing or unparseable; returns the
+    whole SOT if the query is empty.
     """
 
     if not os.path.exists(MEMORY_FILE):

@@ -9,10 +9,11 @@ incrementally and lights each pipeline node as the events arrive.
 import json
 import traceback
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from core.auth import require_write_password
 from core.graph_entry_node import GraphEntryNode
 from core.ingestion_pipeline import stream_ingestion_pipeline
 
@@ -28,7 +29,7 @@ class LessonIngestRequest(BaseModel):
     raw_text: str
 
 
-@router.post("/ingest")
+@router.post("/ingest", dependencies=[Depends(require_write_password)])
 def ingest_lesson(req: LessonIngestRequest):
     event = entry_node.run(
         course=req.course,

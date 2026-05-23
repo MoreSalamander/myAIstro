@@ -38,8 +38,34 @@ CHUNK_TARGET_CHARS = 12000
 
 def summarize_lesson(raw_text: str) -> dict:
     """
-    Takes raw lesson text and returns structured summary output.
-    This is a core SOT transformation node.
+    Extract structured knowledge from a raw lesson into the SOT
+    contract shape. The main entry point of this module.
+
+    Returns
+    -------
+    dict
+        {
+          "summary":      "<4-8 sentence prose explanation>",
+          "key_concepts": ["..."],
+          "definitions":  ["term — explanation", ...],
+          "code_blocks":  ["...", ...],
+          "generated_at": "<ISO-8601 UTC>",
+        }
+
+    Behavior notes:
+      - Empty / whitespace-only input returns the empty-shape early.
+      - Lessons longer than CHUNK_THRESHOLD_CHARS are chunked and
+        their partial summaries merged (chunking loses some
+        key_concepts in practice, so the one-shot path is preferred
+        when the input fits the model's context window).
+      - The LLM (llama3:8b) returns JSON without `format=json` mode
+        — `format=json` was observed to over-restrict structure on
+        long lessons. Permissive parsing + bracket repair handles
+        the common malformed-output failure modes (truncation,
+        nested-JSON wrapping, prose preambles, markdown fences).
+      - Total failure (no parseable JSON at any depth) returns the
+        raw model output in the `summary` field. Validation will
+        catch this via the not-raw-JSON check and refuse to write.
     """
 
     # -----------------------------
@@ -74,7 +100,7 @@ def _summarize_one_shot(raw_text: str) -> dict:
 
 - "summary": 4-8 sentences of plain-English prose explaining what the lesson teaches. Cover the main ideas AND the key supporting points (specific tags, attributes, mechanisms, examples). Do NOT just restate the title; do NOT pad with filler.
 - "key_concepts": array of short noun phrases (1-5 words each) for every distinct idea, term, attribute, mechanism, or behavior the lesson covers. Aim for 8-15 entries on a substantive lesson.
-- "definitions": array of STRINGS (not objects). Each string is one "term — explanation" pair, where the term names something the lesson explains (a tag, attribute, mechanism, or concept) and the explanation is what the lesson says it does. Example: "name attribute — becomes the key in the URL's query string when the form is submitted". Empty array only if the lesson truly explains nothing.
+- "definitions": array of STRINGS (not objects). Each string is one "term — explanation" pair, where the term names something the lesson explains (a tag, attribute, mechanism, or concept) and the explanation is what the lesson says it does. Format: "<term from this lesson> — <one-sentence explanation drawn from this lesson>". Do NOT copy the format placeholder into your output verbatim — use it only to learn the shape. Every definition must come from the lesson below. Empty array only if the lesson truly explains nothing.
 - "code_blocks": array of strings. Each string is one complete code example copied VERBATIM from the lesson, with line breaks preserved as `\\n` escapes inside the JSON string. An HTML document is one entry, not one entry per tag. Do NOT wrap entries in triple-backtick fences. Empty array if the lesson has no code.
 
 Return only the JSON object — no commentary, no markdown fences, no prose before or after.
@@ -131,6 +157,15 @@ LESSON:
     # (typically code_blocks) win even though the real code is sitting
     # in the nested JSON.
     parsed = _enrich_from_nested(parsed)
+
+    # Last-ditch field recovery: when the model emits a recognizable JSON
+    # structure but the bracket-repair lands on a partial parse where the
+    # arrays come back empty, regex-extract them directly from the raw
+    # text. Observed on llama3:8b "Arrow functions (=>)" — model emitted
+    # complete key_concepts but the parser landed on a truncated branch
+    # that returned []. Mirrors the existing _NESTED_SUMMARY_RE fallback
+    # for the summary field.
+    parsed = _enrich_from_regex(parsed, output_text)
 
     # -----------------------------
     # FINAL STANDARDIZED OUTPUT
@@ -348,6 +383,71 @@ def _unwrap_nested_summary(text: str, depth: int = 0) -> str:
                 return _unwrap_nested_summary(inner, depth + 1)
 
     return text
+
+
+def _enrich_from_regex(parsed: dict, raw_output: str) -> dict:
+    """
+    Final-fallback field recovery. When structured parsing produced a dict
+    but the arrays are empty (typically because bracket-repair landed on a
+    truncated branch), pull the missing arrays directly out of the raw
+    LLM output via regex.
+
+    Operates only on fields the parser left empty — never overwrites a
+    successful structured parse.
+    """
+    if not isinstance(parsed, dict) or not raw_output:
+        return parsed
+
+    out = dict(parsed)
+    for field in ("key_concepts", "definitions", "code_blocks"):
+        existing = out.get(field)
+        if isinstance(existing, list) and len(existing) > 0:
+            continue
+        recovered = _regex_extract_string_array(raw_output, field)
+        if recovered:
+            out[field] = recovered
+    return out
+
+
+def _regex_extract_string_array(text: str, field: str) -> list:
+    """
+    Pull a top-level JSON string-array field out of LLM output by regex.
+
+    Handles three shapes:
+      - Closed array: `"field": [ "a", "b" ]`
+      - Truncated array: `"field": [ "a", "b"`  (no closer)
+      - Fenced or prose-wrapped JSON — caller passes the raw text and
+        the regex doesn't care about the surrounding wrapper.
+
+    Each entry is JSON-decoded individually, so escaped quotes /
+    unicode-escapes inside a single string survive even if the array
+    itself never closed.
+    """
+    if not text or not field:
+        return []
+
+    closed = re.search(rf'"{field}"\s*:\s*\[(.*?)\]', text, re.DOTALL)
+    body = closed.group(1) if closed else None
+
+    if body is None:
+        truncated = re.search(rf'"{field}"\s*:\s*\[(.*)$', text, re.DOTALL)
+        if not truncated:
+            return []
+        body = truncated.group(1)
+        # Cut at the first sibling field (`"other_key":`) if the array's
+        # tail wandered into the next field — paranoia for malformed JSON.
+        sibling = re.search(r'\n\s*"[A-Za-z_][A-Za-z0-9_]*"\s*:', body)
+        if sibling:
+            body = body[: sibling.start()]
+
+    items: list = []
+    for sm in re.finditer(r'"((?:[^"\\]|\\.)*)"', body):
+        raw = sm.group(1)
+        try:
+            items.append(json.loads('"' + raw + '"'))
+        except json.JSONDecodeError:
+            items.append(raw)
+    return items
 
 
 def _summarize_chunked(raw_text: str) -> dict:

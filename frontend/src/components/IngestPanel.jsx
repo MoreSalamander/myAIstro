@@ -1,7 +1,31 @@
+/**
+ * IngestPanel — the paste-a-lesson modal flow.
+ *
+ * UX: course / week / lesson identifying fields plus a raw-text area.
+ * Submitting POSTs to /api/ingest (write-password gated) which streams
+ * back NDJSON events from the five-stage pipeline. Each event updates
+ * the DataFlowCanvas so the user watches each pipeline node light up
+ * as the backend actually finishes that stage — not a client-side timer
+ * faking progress.
+ *
+ * State machine:
+ *   - `task`         : the in-flight ingest's event + completed timeline
+ *   - `runningStep`  : which stage is currently active (for canvas pulse)
+ *   - `busy/error`   : standard UI loading/error states
+ *
+ * On a successful memory_write the parent's `onIngested` callback runs;
+ * App.jsx uses this to bump `dataVersion` so live views (Graph, List,
+ * Archives) re-fetch.
+ *
+ * @param {object}   props
+ * @param {Function} props.onIngested  Called after a successful ingest
+ */
+
 import { useState } from "react";
 import DataFlowCanvas from "./DataFlowCanvas";
+import { writeFetch } from "../lib/writeAuth";
 
-export default function IngestPanel() {
+export default function IngestPanel({ onIngested }) {
   // task = { event, timeline: [completed step events] }; built up as the
   // backend streams progress. Initialized with an empty timeline on the
   // first request so the canvas can render the always-visible pipeline.
@@ -33,6 +57,7 @@ export default function IngestPanel() {
       ) {
         setLesson("");
         setInputText("");
+        onIngested?.();
       }
     } else if (chunk.type === "error") {
       setError(chunk.message);
@@ -47,7 +72,7 @@ export default function IngestPanel() {
     setRunningStep(null);
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/ingest", {
+      const res = await writeFetch("/api/ingest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

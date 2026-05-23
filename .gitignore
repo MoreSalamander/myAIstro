@@ -18,3 +18,20 @@ dist/
 # Secrets
 .env
 .env.local
+
+# my-AI-stro runtime data — contains personal lesson content; never commit.
+# If any of these are currently tracked (true for an early version of this
+# repo), run:
+#   git rm --cached backend/memory_store.json backend/archived_store.json \
+#     backend/visits.json
+#   git rm --cached -r backend/classroom/plans backend/classroom/sessions
+# and commit. For full history scrub before going public, use git-filter-repo.
+backend/memory_store.json
+backend/archived_store.json
+backend/visits.json
+backend/memory_store.*.json.bak
+backend/archived_store.*.json.bak
+
+# Classroom artifacts — runtime-generated, may contain personal content
+backend/classroom/plans/
+backend/classroom/sessions/

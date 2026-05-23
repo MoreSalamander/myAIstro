@@ -1,8 +1,21 @@
 {
-  "name": "frontend",
+  "name": "myaistro-frontend",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
+  "description": "React/Vite frontend for my-AI-stro — a local-first, self-improving personal knowledge system. Five-panel SPA (Graph, List, Archives, Classroom, About) with a force-directed graph view of the Source of Truth and an NDJSON-streaming ingest pipeline.",
+  "keywords": [
+    "react",
+    "vite",
+    "tailwind",
+    "force-directed-graph",
+    "local-first",
+    "knowledge-management",
+    "llm",
+    "ollama"
+  ],
+  "license": "MIT",
+  "author": "Kevin (0ne29)",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

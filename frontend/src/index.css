@@ -2,9 +2,157 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
+:root {
+  --bg-0: #04060a;
+  --bg-1: #060912;
+  --bg-2: #0a0f1a;
+
+  --panel: rgba(10, 14, 22, 0.72);
+  --panel-strong: rgba(10, 14, 22, 0.88);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  --text: rgba(255, 255, 255, 0.92);
+  --text-dim: rgba(255, 255, 255, 0.55);
+  --text-mute: rgba(255, 255, 255, 0.35);
+
+  --accent: #39ff14;
+  --accent-soft: rgba(57, 255, 20, 0.55);
+  --accent-glow: rgba(57, 255, 20, 0.32);
+  --accent-bg: rgba(57, 255, 20, 0.08);
+
+  --accent-yellow: #f7ff00;
+  --accent-yellow-soft: rgba(247, 255, 0, 0.55);
+  --accent-yellow-glow: rgba(247, 255, 0, 0.32);
+  --accent-yellow-bg: rgba(247, 255, 0, 0.08);
+
+  --warn: #f59e0b;
+  --danger: #ef4444;
+
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  color-scheme: dark;
+}
+
+html, body, #root {
   margin: 0;
-  background: radial-gradient(circle at center, #05060a, #000000);
+  min-height: 100vh;
+}
+
+body {
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  background-color: var(--bg-0);
+  background-image:
+    radial-gradient(
+      ellipse 80% 60% at 20% 0%,
+      rgba(57, 255, 20, 0.08),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 60% 50% at 90% 100%,
+      rgba(76, 0, 255, 0.10),
+      transparent 60%
+    ),
+    radial-gradient(
+      circle at center,
+      var(--bg-2),
+      var(--bg-0) 70%
+    ),
+    linear-gradient(
+      to bottom,
+      var(--bg-1),
+      var(--bg-0)
+    );
+  background-attachment: fixed;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Subtle grid overlay — terminal-grid texture */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(57, 255, 20, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(57, 255, 20, 0.035) 1px, transparent 1px);
+  background-size: 48px 48px;
+  background-position: -1px -1px;
+  pointer-events: none;
+  z-index: 0;
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 50%, black 50%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 50%, black 50%, transparent 100%);
+}
+
+/* Slow-drifting aurora — keeps the page feeling alive without being noisy */
+body::after {
+  content: "";
+  position: fixed;
+  inset: -25%;
+  background:
+    conic-gradient(
+      from 0deg at 30% 40%,
+      transparent 0deg,
+      rgba(57, 255, 20, 0.05) 90deg,
+      transparent 180deg,
+      rgba(168, 85, 247, 0.05) 270deg,
+      transparent 360deg
+    );
+  filter: blur(80px);
+  pointer-events: none;
+  z-index: 0;
+  animation: aurora 38s linear infinite;
+  opacity: 0.7;
+}
+
+@keyframes aurora {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Custom scrollbars to match the theme */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(57, 255, 20, 0.18);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(57, 255, 20, 0.35);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+/* Selection in accent */
+::selection {
+  background: rgba(57, 255, 20, 0.35);
   color: white;
-  font-family: system-ui;
+}
+
+/* Helpers used inline by components */
+.glow-pulse {
+  animation: glow-pulse 2.4s ease-in-out infinite;
+}
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px var(--border), 0 0 24px var(--accent-glow); }
+  50%      { box-shadow: 0 0 0 1px var(--accent-soft), 0 0 36px var(--accent-glow); }
+}
+
+/* Mono treatment for "terminal-y" text */
+.mono {
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
 }

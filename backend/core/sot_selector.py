@@ -18,6 +18,8 @@ import os
 import re
 from typing import Dict, List, Optional
 
+from core.sot_groups import canonical_entries
+
 
 SOT_FILE = "memory_store.json"
 
@@ -104,13 +106,23 @@ def select_relevant_entries(query: str) -> List[Dict]:
 
 
 def _load_sot() -> List[Dict]:
+    """
+    Load the SOT and filter to CANONICAL entries only.
+
+    The on-disk SOT contains both canonical entries and audit-generated
+    alternates (v2, v3 of the same lesson). Downstream consumers
+    universally want the canonical one — and for the advisor in
+    particular, returning both versions doubles the context tokens
+    and weighs the same concepts twice in the keyword-overlap score.
+    """
     if not os.path.exists(SOT_FILE):
         return []
     with open(SOT_FILE) as f:
         try:
-            return json.load(f)
+            data = json.load(f)
         except json.JSONDecodeError:
             return []
+    return canonical_entries(data)
 
 
 def _find_course(query: str) -> Optional[str]:

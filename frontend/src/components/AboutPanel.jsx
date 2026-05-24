@@ -188,6 +188,13 @@ export default function AboutPanel() {
             it has something useful to do.
           </p>
           <p>
+            The read side runs the same shape — see{" "}
+            <em>The advisor pipeline</em> below for the full breakdown.
+            Both pipelines emit identical NDJSON event vocabularies;
+            both ride the same observability layer in the UI. The
+            pattern is now used twice, deliberately.
+          </p>
+          <p>
             <strong>Memory Writer</strong> is the gate to the file
             system itself. Atomic temp-file-and-rename writes so a
             crash mid-write can't corrupt the SOT. Upsert by{" "}
@@ -245,6 +252,93 @@ export default function AboutPanel() {
           </p>
         </Section>
 
+        <Section title="The advisor pipeline">
+          <p>
+            my-AI-stro Chat — the natural-language query interface over
+            your SOT — runs on its own pipeline, architecturally
+            parallel to the ingestion pipeline. Same streaming-NDJSON
+            event model, same stage-by-stage discipline. Where
+            ingestion turns raw text into one validated SOT entry, the
+            advisor turns one user question into a study guide
+            assembled from N entries.
+          </p>
+          <p>
+            Each query flows through a fixed sequence:
+          </p>
+          <PipelineDiagram
+            stages={[
+              "retrieval",
+              "arc",
+              "section ×N",
+              "recap",
+              "assembly",
+            ]}
+          />
+          <p>
+            <strong>Retrieval</strong> selects relevant canonical SOT
+            entries via course/week-aware filtering plus keyword
+            overlap. Audit-generated satellites are filtered out —
+            the advisor never weighs duplicate versions of the same
+            lesson.{" "}
+            <strong>Arc</strong> is one focused LLM call that reads
+            the matched lesson list and writes a 2-4 sentence opening
+            paragraph naming the conceptual journey across the
+            lessons; skipped for single-entry queries.{" "}
+            <strong>Section ×N</strong> is the map step — one LLM
+            call per retrieved entry, each producing a single
+            study-guide section with markdown header, key concepts,
+            definitions, and verbatim code samples.{" "}
+            <strong>Recap</strong> mirrors the arc at the other end:
+            a short closing paragraph naming what the user should now
+            understand.{" "}
+            <strong>Assembly</strong> is pure Python — string
+            concatenation of the streamed tokens in arrival order.
+            No second LLM call.
+          </p>
+          <p>
+            <strong>Why per-section instead of one big LLM call?</strong>{" "}
+            The previous single-shot design fed all N entries to one
+            call with a fixed output budget and produced three
+            measurable failure modes. Code samples got compressed
+            away — heavy in tokens, easy to cut. Per-lesson grounding
+            occasionally drifted, e.g. the model once inverted a "use
+            stable id, not array index" lesson into its opposite. And
+            depth-per-lesson was uneven, depending on what the model
+            chose to compress. Per-section processing fixes all three:
+            each lesson gets its own output budget, each section's
+            prompt sees only that one lesson so grounding errors stay
+            localized, and the structure is consistent run-to-run
+            because every section runs the same template.
+          </p>
+          <p>
+            <strong>Why deterministic assembly instead of an LLM reduce?</strong>{" "}
+            The arc and recap are LLM calls, but they're scoped
+            reduces — each works only from the lesson list (titles +
+            summaries), never from the per-section content. A bad arc
+            or recap affects only that one paragraph; sections are
+            unaffected. Final assembly is pure Python. A reduce step
+            that read all N sections would be exactly the place to
+            hallucinate cross-lesson claims the system has no source
+            for — so the system doesn't take that risk.
+          </p>
+          <p>
+            <strong>The architectural unification matters.</strong>{" "}
+            Both pipelines emit the same event vocabulary
+            (<Code>step_start</Code>, <Code>step_complete</Code>,{" "}
+            <Code>token</Code>, <Code>done</Code>,{" "}
+            <Code>error</Code>). Both ride the same observability
+            layer in the UI — the ingest pipeline lights up the Data
+            Flow canvas; the advisor pipeline drives a live staging
+            strip showing "section 3 of 9 · Conditional rendering"
+            above the response. The pattern is now used twice,
+            deliberately. When a third streaming multi-stage
+            operation appears — batch re-summarization, course-wide
+            re-grounding, anything that fits the shape — it plugs in
+            at the same event model. The first use was scaffolding;
+            the second use proves it's a system pattern.
+          </p>
+        </Section>
+
         <Section title="The graph, decoded">
           <p>
             The Graph view is the home of my-AI-stro. What you're looking
@@ -296,9 +390,9 @@ export default function AboutPanel() {
           </p>
         </Section>
 
-        <Section title="Four ways to interact with your knowledge">
+        <Section title="Five ways to interact with your knowledge">
           <p>
-            Once a lesson is in the SOT, you have four ways to engage with
+            Once a lesson is in the SOT, you have five ways to engage with
             it:
           </p>
           <ul style={listStyle}>
@@ -313,8 +407,23 @@ export default function AboutPanel() {
             </li>
             <li>
               <strong>my-AI-stro Chat</strong> — query. Natural-language
-              Q&A grounded strictly in retrieved SOT entries. The advisor
-              refuses to invent material you haven't actually learned.
+              Q&A grounded strictly in retrieved SOT entries, served by
+              the dedicated advisor pipeline described above. The
+              advisor refuses to invent material you haven't actually
+              learned.
+            </li>
+            <li>
+              <strong>Notebook</strong> — save. When the advisor
+              produces a study guide you want to keep, save it to your
+              Notebook. The saved note is a snapshot — same markdown,
+              same syntax-highlighted code, same structure — viewable
+              without re-running the 3-4 minute pipeline. Each saved
+              section keeps a clickable reference back to the source
+              SOT lesson it was assembled from, so the Notebook is a
+              navigation hub between derived content and source. Notes
+              are user-curated artifacts: explicitly not part of the
+              SOT (the SOT is "what I learned"; the Notebook is "what
+              I asked the advisor to assemble from what I learned").
             </li>
             <li>
               <strong>Classroom</strong> — be taught. The Teacher Aide
@@ -336,9 +445,11 @@ export default function AboutPanel() {
           <p>
             my-AI-stro lives entirely on your machine. The SOT is{" "}
             <Code>backend/memory_store.json</Code>. The audit archive is{" "}
-            <Code>backend/archived_store.json</Code>. The Obsidian vault
-            mirror is at <Code>~/Documents/myAIstro-vault/</Code>. The
-            LLMs run via Ollama on your Mac's GPU — llama3, llama3.2,
+            <Code>backend/archived_store.json</Code>. Saved Notebook
+            entries are one JSON each under{" "}
+            <Code>backend/notebook/</Code>. The Obsidian vault mirror is
+            at <Code>~/Documents/myAIstro-vault/</Code>. The LLMs run
+            via Ollama on your Mac's GPU — llama3, llama3.1, llama3.2,
             mistral, all local.
           </p>
           <p>
@@ -615,7 +726,7 @@ const AGENTS = [
   ["Validation",      "Gate writes against malformed model output",    "— rule-based"],
   ["Audit",           "Background self-improvement loop",              "— orchestrator"],
   ["Judge",           "Score summary richness for the archive cycle",  "— deterministic"],
-  ["Advisor",         "SOT-grounded natural-language chat",            "llama3.2:latest"],
+  ["Advisor",         "SOT-grounded chat (per-section pipeline)",      "llama3.1:8b"],
   ["Quiz Generator",  "Phrase recall questions from a lesson",         "llama3.2:latest"],
   ["Quiz Grader",     "Score student answers (separate from gen)",     "mistral:latest"],
   ["General Chat",    "Untethered conversation, no SOT context",       "llama3.2:latest"],

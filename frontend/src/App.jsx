@@ -37,6 +37,7 @@ import GraphPanel from "./components/GraphPanel";
 import LessonDrawer from "./components/LessonDrawer";
 import ArchivesPanel from "./components/ArchivesPanel";
 import ClassroomPanel from "./components/classroom/ClassroomPanel";
+import NotebookPanel from "./components/NotebookPanel";
 import AboutPanel from "./components/AboutPanel";
 import {
   getStoredWritePassword,
@@ -62,8 +63,12 @@ export default function App() {
       /* localStorage blocked — fall through */
     }
     return "about";
-  }); // "map" | "list" | "archives" | "classroom" | "about"
+  }); // "map" | "list" | "notebook" | "archives" | "classroom" | "about"
   const [classroomPresetEntry, setClassroomPresetEntry] = useState(null);
+  // Preset for the new Notebook → Classroom flow. Carries the
+  // notebook_id + section_index that ClassroomPanel uses to call
+  // /api/classroom/plan-from-section. Cleared once consumed.
+  const [classroomPresetSection, setClassroomPresetSection] = useState(null);
   const [selected, setSelected] = useState(null); // graph node or list entry
   const [modal, setModal] = useState(null); // null | "ingest" | "quiz" | "advisor" | "general"
   const [modalLesson, setModalLesson] = useState(null);
@@ -204,11 +209,23 @@ export default function App() {
         {view === "list" && (
           <SotBrowser onSelect={openLesson} dataVersion={dataVersion} />
         )}
+        {view === "notebook" && (
+          <NotebookPanel
+            onSelectLesson={openLesson}
+            dataVersion={dataVersion}
+            onTeachSection={(payload) => {
+              setClassroomPresetSection(payload);
+              setView("classroom");
+            }}
+          />
+        )}
         {view === "archives" && <ArchivesPanel dataVersion={dataVersion} />}
         {view === "classroom" && CLASSROOM_ENABLED && (
           <ClassroomPanel
             presetEntry={classroomPresetEntry}
             onClearPreset={() => setClassroomPresetEntry(null)}
+            presetSection={classroomPresetSection}
+            onClearPresetSection={() => setClassroomPresetSection(null)}
             isOwner={!writeProtected || unlocked}
           />
         )}
@@ -559,6 +576,9 @@ function ViewToggle({ view, setView, onIngest }) {
         </ToggleSeg>
         <ToggleSeg active={view === "list"} onClick={() => setView("list")}>
           List
+        </ToggleSeg>
+        <ToggleSeg active={view === "notebook"} onClick={() => setView("notebook")}>
+          Notebook
         </ToggleSeg>
         <ToggleSeg active={view === "archives"} onClick={() => setView("archives")}>
           Archives

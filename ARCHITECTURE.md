@@ -48,10 +48,11 @@ Topics, in order:
                   └─────────────┘    └─────────────┘      └──────────────┘
 ```
 
-Three local LLMs serve different roles:
+Four local LLMs serve different roles:
 - `llama3:8b` — summarization only (the SOT extractor)
-- `llama3.2` — conversational roles (advisor, quiz generator, teacher aide, teacher, general chat)
-- `mistral` — quiz grading (the LLM-as-judge separation rule)
+- `llama3.1:8b` — advisor (per-section study guides from the SOT)
+- `llama3.2` — conversational roles (quiz generator, teacher aide, teacher, general chat)
+- `mistral` — quiz grading (judge-separated from the quiz generator)
 
 Everything runs on a single Mac. There are no remote calls beyond Ollama on `localhost`.
 
@@ -123,6 +124,63 @@ When a lesson is pasted into the Ingest modal, it travels a fixed five-stage pip
 
 ---
 
+## The advisor pipeline
+
+User-facing chat over the SOT is its own pipeline (`core/advisor_pipeline.py`), architecturally parallel to ingestion. Same streaming-NDJSON shape, same event vocabulary, same one-action-per-stage discipline.
+
+```
+   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+   │  retrieval   │─►│     arc      │─►│  section ×N  │─►│    recap     │─►│   assembly   │
+   │              │  │              │  │              │  │              │  │              │
+   │ sot_selector │  │  llama3.1:8b │  │  llama3.1:8b │  │  llama3.1:8b │  │ deterministic│
+   │              │  │  (one para)  │  │  (per entry) │  │  (one para)  │  │ terminal     │
+   └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
+```
+
+**retrieval** (`core/sot_selector.py`): picks relevant canonical SOT entries via course/week-aware filtering plus keyword-overlap scoring. Returns canonicals only — audit-generated satellites are filtered out at the `_load_sot` boundary so the advisor never weighs duplicate versions of the same lesson.
+
+**arc** (`agents/advisor_agent.py::stream_reduce` with `mode="arc"`): one focused LLM call that reads the matched lesson list (just titles + first-sentence summaries) and writes a 2-4 sentence opening paragraph naming the conceptual journey across the lessons. Skipped for single-entry queries — there's no arc to narrate across one lesson. The arc reduce intentionally does NOT see the per-section output; it works only from the lesson list, which keeps it fast (~5-10s) and isolates its failure mode (a bad arc never affects section quality).
+
+**section ×N** (`agents/advisor_agent.py::stream_section`): the map step. One LLM call per retrieved entry. Each call receives ONE SOT entry's full content plus the user's question, and produces a single study-guide section (markdown header, key concepts, definitions, code samples, brief overview). Sections run sequentially because Ollama serves one request per model at a time on a single GPU — parallelism would just queue.
+
+**recap** (`agents/advisor_agent.py::stream_reduce` with `mode="recap"`): mirror of the arc at the other end. Same input shape (lesson list + summaries, not section content), same isolation properties. Writes a 2-3 sentence closing paragraph naming what the user should now understand.
+
+**assembly**: deterministic terminal marker. The assembled output IS the concatenated token stream the client has already received in order — Python does the concatenation implicitly via the streaming event order. No second LLM call here.
+
+### Why this architecture instead of a single LLM call
+
+The previous design fed all N retrieved entries to a single LLM call with one fixed output budget. Three problems followed:
+
+1. **Code samples got compressed away.** With a fixed output budget split across 9 lessons, the model would summarize the prose and drop the code (heavy in tokens, easy to cut).
+2. **Per-lesson grounding occasionally drifted.** Skim-reading 9 entries at once produced inversion errors — e.g., the model once flipped the "use stable id, not array index" lesson into its opposite.
+3. **Output structure was uneven.** Some lessons got dense treatment, others got two-bullet stubs, depending on what the model decided to compress.
+
+The per-section pipeline fixes all three: each lesson gets a dedicated output budget; each section's prompt sees only that one lesson, so grounding errors stay localized; and the structure is consistent across runs because every section runs the same template.
+
+### Why deterministic assembly instead of an LLM reduce
+
+The assembly stage is pure Python — string concatenation of the already-streamed tokens in arrival order. An LLM reduce would be a second model call that could hallucinate cross-lesson claims it never saw evidence for. Aligns with the project's "model proposes, Python disposes" rule (see [The Deterministic Scaffold](#the-deterministic-scaffold) below).
+
+The arc and recap ARE LLM calls — but they're scoped reduces, narrowly focused on framing-paragraph generation from a known input (the lesson list). They never modify, edit, or comment on the sections themselves.
+
+### Event shapes
+
+Both pipelines share the same event vocabulary:
+
+```
+{"type": "start",         "query": "..."}                       # advisor
+{"type": "start",         "event": {...}}                       # ingest
+{"type": "step_start",    "step": "<stage_name>", ...}
+{"type": "step_complete", "step": "<stage_name>", ...}
+{"type": "token",         "value": "...", "section_id": "..."}  (many — advisor)
+{"type": "done"}
+{"type": "error",         "message": "..."}
+```
+
+The frontend's `ChatPanel.jsx` (for advisor) and `DataFlowCanvas.jsx` (for ingest) consume this identical event vocabulary differently — ChatPanel maintains a live staging strip ("section 3 of 9 · Conditional rendering") plus accumulates token events into a markdown-rendered response body; DataFlowCanvas lights up pipeline nodes as their step_complete events arrive.
+
+---
+
 ## Agent roster
 
 Eleven named agents. Each does exactly one thing.
@@ -133,7 +191,7 @@ Eleven named agents. Each does exactly one thing.
 | Validation | Pre-write gate | `agents/validation_agent.py` | pure Python |
 | Audit | Background self-improvement loop | `agents/audit_agent.py` | orchestrator (pure Python) |
 | Judge | Score audit-generated alternatives | `agents/judge_agent.py` | pure Python (deterministic) |
-| Advisor | SOT-grounded natural-language chat | `agents/advisor_agent.py` | `llama3.2` |
+| Advisor | SOT-grounded natural-language chat (per-section pipeline) | `agents/advisor_agent.py` + `core/advisor_pipeline.py` | `llama3.1:8b` |
 | Quiz Generator | Recall questions from a lesson | `agents/quiz_agent.py::generate_question` | `llama3.2` |
 | Quiz Grader | Score student answers (judge-separated) | `agents/quiz_agent.py::grade_answer` | `mistral` |
 | General Chat | Untethered conversation, no SOT grounding | `agents/general_chat_agent.py` | `llama3.2` |
@@ -350,12 +408,13 @@ Measured on M4 Pro / 24GB RAM. Numbers are rough.
 |---|---|---|
 | Load `/api/sot/graph` (~200 lessons) | <100ms | JSON parse + concept-link computation |
 | Ingest a typical lesson | 15-30 s | llama3:8b summarization |
-| Advisor chat (single query) | 5-15 s first token, then streaming | llama3.2 generation |
+| Advisor query (single SOT entry) | ~20 s for full section | llama3.1:8b generation |
+| Advisor query (9 entries — e.g. course-week study guide) | ~3-4 min total: ~6s arc + ~20s × 9 sections + ~6s recap | sequential LLM calls (Ollama serves one per model at a time) |
 | Quiz grading | 3-8 s | mistral grading call |
 | Manual audit step (`/api/audit/run-once`) | 0.1-30 s | depends on action: score-and-archive is <1s, create-new-version is 15-30s |
 | Background audit cycle | one action per 15 min | rate-limited intentionally |
 
-**Memory.** llama3:8b uses ~5-6GB resident in VRAM. llama3.2 uses ~3GB. mistral uses ~4GB. Ollama will evict idle models to serve another, so the first call after switching roles may incur a model-load cost of 2-5 seconds.
+**Memory.** llama3:8b uses ~5-6GB resident in VRAM. llama3.1:8b similar (~5GB). llama3.2 (3B variant) uses ~2-3GB. mistral uses ~4GB. Ollama will evict idle models to serve another, so the first call after switching roles may incur a model-load cost of 2-5 seconds. The advisor pipeline keeps llama3.1:8b hot across its arc/section/recap calls (all the same model), so within a single advisor query there's no swap cost between stages.
 
 **Scale ceiling.** The SOT is loaded into memory on every API call. With ~200 lessons (~6MB JSON file), this is sub-100ms. Past a few thousand lessons, the design would want to either keep the SOT cached in memory across requests or move to a real database. Not a priority for a personal-tool use case.
 

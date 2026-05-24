@@ -22,7 +22,13 @@ import BeatRenderer from "./BeatRenderer";
  *                   we've consumed it (so future toggle visits to
  *                   Classroom go back to the picker).
  */
-export default function ClassroomPanel({ presetEntry, onClearPreset, isOwner = true }) {
+export default function ClassroomPanel({
+  presetEntry,
+  onClearPreset,
+  presetSection,
+  onClearPresetSection,
+  isOwner = true,
+}) {
   const [phase, setPhase] = useState("PICKER"); // PICKER | PLANNING | PLAYING | ENDED
   const [plan, setPlan] = useState(null);
   const [session, setSession] = useState(null);
@@ -38,6 +44,17 @@ export default function ClassroomPanel({ presetEntry, onClearPreset, isOwner = t
     onClearPreset?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetEntry]);
+
+  // Consume the presetSection from the Notebook ("Teach me this section").
+  // Different from presetEntry: we DON'T cache-check (each section
+  // generation is fresh from its own snapshot) and we route to the new
+  // /api/classroom/plan-from-section endpoint instead of /plan.
+  useEffect(() => {
+    if (!presetSection) return;
+    generatePlanFromSection(presetSection);
+    onClearPresetSection?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presetSection]);
 
   // -------- Phase transitions --------
   const reset = () => {
@@ -143,6 +160,84 @@ export default function ClassroomPanel({ presetEntry, onClearPreset, isOwner = t
       if (!fresh) {
         throw new Error("Plan generation completed without a plan");
       }
+      await beginSessionFromPlan(fresh);
+    } catch (e) {
+      setError(e.message ?? String(e));
+      setPhase("PICKER");
+    }
+  }
+
+  // Generate a plan from a saved Notebook section. Calls the new
+  // /api/classroom/plan-from-section endpoint, which builds the plan
+  // from the section content (not the raw SOT entry) and runs the
+  // new Python grounding pass on the result. Same streaming event
+  // shape as generatePlan, so the planning UI is identical.
+  async function generatePlanFromSection(payload) {
+    setError(null);
+    setPhase("PLANNING");
+    setPlanningStatus(
+      `Generating plan from saved section: ${payload.course} · w${payload.week} · ${payload.lesson}…`,
+    );
+
+    try {
+      const res = await writeFetch("/api/classroom/plan-from-section", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          notebook_id: payload.notebook_id,
+          section_index: payload.section_index,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`HTTP ${res.status}: ${body}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let planId = null;
+      let beatCount = 0;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let evt;
+          try {
+            evt = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (evt.type === "progress") {
+            setPlanningStatus("Drafting beats…");
+          } else if (evt.type === "model_start") {
+            setPlanningStatus(
+              evt.attempt === 2
+                ? "Retrying — first draft didn't pass…"
+                : "Teacher Aide is thinking about your saved section…",
+            );
+          } else if (evt.type === "beat") {
+            beatCount += 1;
+            setPlanningStatus(`Received beat ${beatCount}…`);
+          } else if (evt.type === "done") {
+            planId = evt.plan_id ?? null;
+            // grounding_report + warnings are also on the done event —
+            // available here for future surfacing if we want to show
+            // a banner before the session starts.
+          } else if (evt.type === "error") {
+            throw new Error(evt.message || "Plan generation failed");
+          }
+        }
+      }
+      if (!planId) {
+        throw new Error("Plan generation completed without a plan id");
+      }
+      const planRes = await fetch(`/api/classroom/plan/${planId}`);
+      if (!planRes.ok) throw new Error(`HTTP ${planRes.status} fetching plan`);
+      const fresh = await planRes.json();
       await beginSessionFromPlan(fresh);
     } catch (e) {
       setError(e.message ?? String(e));

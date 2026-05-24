@@ -35,3 +35,6 @@ backend/archived_store.*.json.bak
 # Classroom artifacts — runtime-generated, may contain personal content
 backend/classroom/plans/
 backend/classroom/sessions/
+
+# Notebook artifacts — runtime-generated, may contain personal content
+backend/notebook/

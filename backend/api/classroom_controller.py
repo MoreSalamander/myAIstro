@@ -34,6 +34,7 @@ from core.classroom_store import (
     start_session as start_session_record,
     update_session,
 )
+from core.notebook_store import get_note
 from agents.plan_validator import validate_plan
 from agents.quiz_agent import grade_answer
 from agents.teacher_agent import phrase_correction
@@ -165,6 +166,170 @@ def generate_plan_endpoint(req: PlanRequest):
             for beat in plan.get("beats", []):
                 yield json.dumps({"type": "beat", "beat": beat}) + "\n"
             yield json.dumps({"type": "done", "plan_id": plan["plan_id"]}) + "\n"
+        except Exception as e:
+            traceback.print_exc()
+            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+# =========================================================
+# PLAN  ←  NOTEBOOK SECTION
+# =========================================================
+# Generate a classroom lesson plan from one section of a saved Notebook
+# entry, instead of from a raw SOT entry. The advisor-pipeline already
+# shaped that section pedagogically (overview + key concepts + defs +
+# code samples drawn from one SOT lesson); the Teacher Aide now picks
+# up that shaped material and breaks it into beats.
+#
+# This is the second leg of the new curation chain:
+#   raw_text → SOT entry → advisor section (in Notebook) → teacher plan
+# Every layer below raw_text is Python-verified at its boundary:
+#   - SOT entry boundary       : validation_agent.py
+#   - Notebook-save boundary   : notebook_controller._attach_grounding_reports
+#   - Teacher-plan boundary    : validate_plan(plan, source_text=section_content)
+# =========================================================
+class PlanFromSectionRequest(BaseModel):
+    notebook_id: str
+    section_index: int
+
+
+@router.post(
+    "/classroom/plan-from-section",
+    dependencies=[Depends(require_write_password)],
+)
+def generate_plan_from_section_endpoint(req: PlanFromSectionRequest):
+    """
+    Streaming NDJSON endpoint, same event vocabulary as
+    /api/classroom/plan, but the source material is one Notebook
+    section instead of a raw SOT entry. The resulting plan carries
+    a `derived_from_notebook_id` / `derived_from_section_index`
+    field so the UI can show provenance.
+
+    Validation: plans generated here go through `validate_plan(plan,
+    source_text=section.content)` — the new Python grounding pass.
+    The plan's beat content is verified against the section it was
+    generated from, with the grounding_report attached to the saved
+    plan. Soft validation (warning only); structural failures still
+    block.
+    """
+    note = get_note(req.notebook_id)
+    if not note:
+        raise HTTPException(status_code=404, detail="Notebook entry not found")
+
+    pieces = note.get("pieces") or []
+    if req.section_index < 0 or req.section_index >= len(pieces):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Section index {req.section_index} out of range (note has {len(pieces)} pieces)",
+        )
+    section = pieces[req.section_index]
+    if section.get("kind") != "section":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Piece at index {req.section_index} is kind={section.get('kind')!r}, not 'section'",
+        )
+
+    # Build a synthetic "entry" the existing teacher_aide_agent can
+    # consume. We put the section's markdown content in raw_text so
+    # the Teacher Aide treats it as the primary lesson material;
+    # identity fields (course/week/lesson/event_id) carry through so
+    # the resulting plan stays referentially tied to the canonical
+    # SOT lesson the section was derived from.
+    section_content = section.get("content") or ""
+    synthetic_entry = {
+        "event_id": section.get("event_id"),
+        "course": section.get("course"),
+        "week": section.get("week"),
+        "lesson": section.get("lesson"),
+        "raw_text": section_content,
+        # Structured fields intentionally empty — the section content
+        # already organizes the material, and the Teacher Aide's
+        # prompt is robust to empty structured fields (it reads
+        # raw_text as the source of truth).
+        "summary": "",
+        "key_concepts": [],
+        "definitions": [],
+        "code_blocks": [],
+    }
+
+    def _attempt(emit_progress):
+        raw_full = ""
+        for evt in stream_plan(synthetic_entry):
+            if evt["type"] == "raw_chunk":
+                emit_progress()
+            elif evt["type"] == "raw_done":
+                raw_full = evt["text"]
+            elif evt["type"] == "model_start":
+                pass
+            elif evt["type"] == "error":
+                return None, {"validation": "FAIL", "errors": [evt["message"]]}
+        plan = parse_plan(raw_full, synthetic_entry)
+        # KEY DIFFERENCE from the SOT-entry path: pass section_content
+        # as source_text so validate_plan runs its new grounding pass.
+        return plan, validate_plan(plan, source_text=section_content)
+
+    def stream():
+        try:
+            yield json.dumps({
+                "type": "start",
+                "lesson_event_id": section.get("event_id"),
+                "derived_from_notebook_id": req.notebook_id,
+                "derived_from_section_index": req.section_index,
+            }) + "\n"
+            yield json.dumps({"type": "model_start"}) + "\n"
+
+            progress_buf = []
+            def emit_progress():
+                progress_buf.append(1)
+
+            plan, validation = _attempt(emit_progress)
+            for _ in progress_buf:
+                yield json.dumps({"type": "progress"}) + "\n"
+            progress_buf.clear()
+
+            # Same single-retry policy as the SOT-entry path — most
+            # validation failures here are transient model variance.
+            if validation.get("validation") != "PASS":
+                _log(
+                    f"section-plan validation FAIL on attempt 1 — retrying. "
+                    f"errors={validation.get('errors')}"
+                )
+                yield json.dumps({"type": "model_start", "attempt": 2}) + "\n"
+                plan, validation = _attempt(emit_progress)
+                for _ in progress_buf:
+                    yield json.dumps({"type": "progress"}) + "\n"
+
+            if validation.get("validation") != "PASS":
+                _log(
+                    f"section-plan validation FAIL on attempt 2 — giving up. "
+                    f"errors={validation.get('errors')}"
+                )
+                yield json.dumps({
+                    "type": "error",
+                    "message": "Generated plan failed validation after retry",
+                    "errors": validation.get("errors"),
+                }) + "\n"
+                return
+
+            # Annotate the plan with provenance + the new grounding
+            # report (if validate_plan attached one). Persisted with
+            # the plan so the Classroom UI can surface "generated from
+            # saved note ‘X’" and show the grounding ratio.
+            plan["derived_from_notebook_id"] = req.notebook_id
+            plan["derived_from_section_index"] = req.section_index
+            if validation.get("grounding_report"):
+                plan["grounding_report"] = validation["grounding_report"]
+
+            plan = save_plan(plan)
+            for beat in plan.get("beats", []):
+                yield json.dumps({"type": "beat", "beat": beat}) + "\n"
+            yield json.dumps({
+                "type": "done",
+                "plan_id": plan["plan_id"],
+                "grounding_report": plan.get("grounding_report"),
+                "warnings": validation.get("warnings", []),
+            }) + "\n"
         except Exception as e:
             traceback.print_exc()
             yield json.dumps({"type": "error", "message": str(e)}) + "\n"

@@ -60,7 +60,11 @@ Plus an always-available **Chat** (the central hub on the graph) — a natural-l
 
 ## Architecture in a paragraph
 
-A lesson enters via a five-stage ingestion pipeline: **graph_entry → retrieval → summarization → validation → memory_write**. Each stage produces a typed event the next consumes. The LLM (llama3:8b) does the structured extraction; pure-Python validation gates the result against the raw lesson, dropping hallucinated bullets and hard-failing entries where more than 60% of items can't be grounded in the source. Validated entries land in the SOT as a JSON file. A background audit loop re-summarizes lessons every 15 minutes, scores alternatives with a deterministic richness formula that *subtracts* points for ungrounded items, and rotates canonicals toward more-grounded versions over time. Three distinct local LLMs (llama3:8b, llama3.2, mistral) split roles under an LLM-as-judge separation rule: the model that generates a thing is never the model that grades it.
+A lesson enters via a five-stage **ingestion pipeline**: graph_entry → retrieval → summarization → validation → memory_write. Each stage produces a typed event the next consumes. The LLM (llama3:8b) does the structured extraction; pure-Python validation gates the result against the raw lesson, dropping hallucinated bullets and hard-failing entries where more than 60% of items can't be grounded in the source. Validated entries land in the SOT as a JSON file. A background audit loop re-summarizes lessons every 15 minutes, scores alternatives with a deterministic richness formula that *subtracts* points for ungrounded items, and rotates canonicals toward more-grounded versions over time.
+
+User-facing chat over the SOT runs a parallel **advisor pipeline** with the same streaming-NDJSON shape: retrieval → arc → section ×N → recap → assembly → done. The arc and recap are short framing paragraphs; each section is one focused LLM call (llama3.1:8b) over a single SOT entry. Per-section processing keeps each lesson's grounding intact and gives every section its own output budget — code samples and depth survive that single-shot would compress away. Both pipelines emit the same event vocabulary; both ride the same observability layer in the UI.
+
+Four distinct local LLMs split roles under two architectural rules: **judge separation** (the model that generates a thing is never the model that grades it — Quiz uses llama3.2 to generate questions, mistral to score answers) and **trust isolation** (the model that owns the canonical SOT — llama3:8b for summarization — never also handles ungrounded chat, which routes to llama3.2 instead).
 
 For the full deep dive — pipeline diagram, agent roster, the deterministic-scaffold thesis, force-layer math behind the graph — see **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
 
@@ -92,12 +96,13 @@ This framing goes by several names in the broader field: *guardrails*, *compound
 ### Pull the local models
 
 ```bash
-ollama pull llama3:8b
-ollama pull llama3.2
-ollama pull mistral
+ollama pull llama3:8b      # SOT extractor (summarization)
+ollama pull llama3.1:8b    # advisor — SOT-grounded chat
+ollama pull llama3.2       # quiz / classroom / general chat
+ollama pull mistral        # quiz grader (judge-separated)
 ```
 
-These are the three models the project routes between. Total disk: ~14GB.
+These are the four models the project routes between. Total disk: ~19GB. Each role's model assignment lives in `backend/core/model_router.py` — one constant per role, changeable in a single line.
 
 ### Backend
 

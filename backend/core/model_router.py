@@ -16,10 +16,18 @@ the first call after switching roles can be slow.
 # -------- Generator roles --------
 SUMMARIZE = "llama3:8b"            # structured extraction of lesson content
 QUIZ_GENERATE = "llama3.2:latest"  # recall-question phrasing from SOT entries
-# llama3.2 has a 128K context window, which the advisor needs for
-# course-wide queries ("study guide for BE101") that select 20+ SOT
-# entries — llama3:8b's 8K cap was squeezing the output too hard.
-ADVISE = "llama3.2:latest"
+# llama3.1:8b — bigger brain than llama3.2:latest (~3B) for the
+# advisor's heaviest workload (course-wide study guides over 9+
+# SOT entries). 128K context like llama3.2 so course-wide queries
+# don't run into the limit. Trades ~2× per-token latency for
+# meaningfully denser, more detailed study-guide output.
+#
+# Why not llama3:8b (which is already pulled and similar size)?
+# Trust isolation: llama3:8b is dedicated to SUMMARIZE. The model
+# that owns the canonical SOT must not also generate free-form
+# user-facing prose. llama3.1:8b is the same-class upgrade that
+# preserves that separation.
+ADVISE = "llama3.1:8b"
 
 # -------- Judge roles --------
 GRADE = "mistral:latest"           # scores user quiz answers; separate from generators

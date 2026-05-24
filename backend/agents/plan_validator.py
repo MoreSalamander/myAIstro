@@ -1,13 +1,39 @@
 """
-Plan Validator — rule-based gatekeeper for Teacher Aide output. Same
-spirit as validation_agent.py: rejects malformed or vacuous plans
-before they get persisted and replayed at the user.
+Plan Validator — rule-based gatekeeper for Teacher Aide output.
 
-Returns a dict { "validation": "PASS"|"FAIL", "score": 0..1, "errors": [], "warnings": [] }
+Same spirit as validation_agent.py at the SOT-write boundary: rejects
+malformed or vacuous plans before they get persisted and replayed at
+the user. Two layers of checking:
+
+  1. Structural validation — the right beats with required fields
+     populated, the right counts, no missing canonical_answers on
+     CHECK beats, etc. A failure here BLOCKS persistence.
+
+  2. Grounding validation (optional, when a source is supplied) —
+     the Python verification fence at the Teacher-Aide → plan_store
+     boundary. Mirrors the advisor-section grounding check (see
+     core/grounding_check.py): substantial-token + code-block
+     verification of beat content against the source material the
+     plan was generated from. The result is attached as a
+     `grounding_report` on the returned dict but does NOT FAIL the
+     plan — it surfaces low-grounding plans so the UI / consumer
+     can flag or refuse them downstream.
+
+Returns:
+  {
+    "validation":      "PASS" | "FAIL",
+    "score":           0..1,
+    "errors":          [...],
+    "warnings":        [...],
+    "validated_at":    ISO-8601,
+    "grounding_report": {...}  # only when a source_text was passed
+  }
 """
 
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
+
+from core.grounding_check import combined_report
 
 
 MIN_BEATS = 3
@@ -17,11 +43,11 @@ MIN_CHECK = 1
 MIN_CONTENT_CHARS = 20
 
 
-def validate_plan(plan: Dict) -> Dict:
+def validate_plan(plan: Dict, source_text: Optional[str] = None) -> Dict:
     """
     Gate a Teacher Aide plan before it's persisted.
 
-    Checks:
+    Structural checks (always run; failures BLOCK persistence):
       - plan is a JSON object with a `beats` array
       - beat count between MIN_BEATS (3) and MAX_BEATS (18)
       - each beat is a typed object with the per-type required fields:
@@ -32,9 +58,19 @@ def validate_plan(plan: Dict) -> Dict:
       - at least MIN_CHECK CHECK beats
       - presence of a RECAP beat (warning only)
 
-    Returns a `{validation, score, errors, warnings, validated_at}`
-    dict. A FAIL prevents persistence; PASS-with-warnings still
-    persists but flags the rough edges.
+    Grounding check (runs when `source_text` is supplied; SOFT — does
+    NOT block persistence, but the report is returned so the caller
+    can surface low-grounding plans or refuse them at the next gate):
+      - concatenates each beat's user-visible content fields
+        (content, explanation, canonical_answer) and verifies the
+        substantial-token / code-block subset against `source_text`
+        using core.grounding_check.combined_report. This is the
+        Python verification fence at the Teacher-Aide → plan_store
+        boundary, mirroring the advisor-section gate at the
+        Notebook-save boundary.
+
+    Returns a `{validation, score, errors, warnings, validated_at,
+    grounding_report?}` dict.
     """
     errors = []
     warnings = []
@@ -93,13 +129,49 @@ def validate_plan(plan: Dict) -> Dict:
 
     if errors:
         return _fail(errors, warnings)
-    return {
+
+    # Optional Python grounding check against the source the plan was
+    # generated from. Soft validation — we attach the report but don't
+    # fail the plan. The caller decides what to do with low-grounding
+    # plans (the Classroom controller currently saves them and lets the
+    # UI surface a warning chip; future tighter modes could refuse to
+    # persist below some ratio threshold).
+    grounding_report = None
+    if source_text:
+        # Concatenate the user-visible content from every beat. We
+        # check that combined text against the source rather than
+        # per-beat so a beat with only "ok" or short prose isn't
+        # individually flagged for low token count — the question is
+        # whether the plan as a whole stayed inside its source.
+        combined_text = "\n\n".join(
+            "\n".join(filter(None, [
+                (b.get("content") or "").strip(),
+                (b.get("explanation") or "").strip(),
+                (b.get("canonical_answer") or "").strip(),
+                (b.get("code") or "").strip(),
+            ]))
+            for b in beats
+            if isinstance(b, dict)
+        )
+        grounding_report = combined_report(combined_text, source_text)
+        if grounding_report["overall_ratio"] < 0.5:
+            warnings.append(
+                f"Plan grounding is low (overall_ratio="
+                f"{grounding_report['overall_ratio']}) — beats may include "
+                f"material not present in the source. "
+                f"Ungrounded sample: {grounding_report['text']['ungrounded_sample'][:5]}"
+            )
+
+    result = {
         "validation": "PASS",
         "score": 1.0 if not warnings else 0.85,
         "errors": [],
         "warnings": warnings,
         "validated_at": datetime.utcnow().isoformat(),
     }
+    if grounding_report is not None:
+        result["grounding_report"] = grounding_report
+    return result
 
 
 def _fail(errors, warnings):

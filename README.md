@@ -31,6 +31,20 @@ The project is also the artifact I'm being trained to produce. I'm in school for
 
 ---
 
+## How this got built — AI-assistance disclosure
+
+This project was built in heavy pair-programming with **[Claude Code](https://claude.com/claude-code)**, Anthropic's CLI coding assistant. The specific Claude model used at each point in time is recorded in the commit history itself — every recent commit ends with a `Co-Authored-By: Claude <model> <noreply@anthropic.com>` footer naming the model that was Claude on that day. The model has changed across the project's lifetime; the commit log is the source of truth for which, when.
+
+**The decision boundary.** The architectural principles, the design decisions, the project's identity — those are mine. *Trust isolation*, *the deterministic scaffold*, *the model proposes; Python disposes*, the grounding contract as a coherent philosophy — those are positions I recognized as right and chose to enshrine. Claude helped explore implementations, surface tradeoffs, sharpen the prose articulation of each principle, and accelerate the drafting work that turned each decision into working code. The vision and the verification are mine; the keystrokes were collaborative.
+
+**The verification practice.** Every Claude-drafted change went through real verification before becoming a commit. I ran the actual code, smoke-tested endpoints, read advisor outputs against my own lesson notes, scored real responses out of 10, and reverted when something didn't hold up. There's a moment in the project's history where a Claude-drafted prompt change made the advisor's output noticeably worse — I caught it on the very first generation, said so plainly, and we reverted it together in the same session. That's the working pattern: AI drafts at speed; I judge at quality; we iterate until both of us are satisfied.
+
+**What this demonstrates about AI Software Engineering.** The skill being shown here is not "I can ask an AI to write code." It's closer to "I can run a team of one AI engineer effectively" — articulating goals precisely, recognizing when the first take is wrong, driving iteration toward the right answer, and maintaining a coherent architectural vision across thousands of lines without losing the thread. That's the discipline my degree program is training toward, and this project is its exercise. The commenting voice in the source, the principle names, the grounding thesis — all emerged from those sessions. They're mine in the sense that I recognized them as right; they're Claude's in the sense that the language got sharpened in dialogue.
+
+**The git history is the evidence.** Every recent commit carries the `Co-Authored-By: Claude <model>` footer. The pairing is not just claimed in this README — it's enshrined at the git-object level, on every commit, naming the specific model that helped. A reviewer who wants the honest provenance can read it directly from the commit log without trusting any prose.
+
+---
+
 ## What it is
 
 my-AI-stro is a five-surface app that runs entirely on a single Mac:
@@ -152,18 +166,6 @@ This publishes `https://<machine-name>.<tailnet>.ts.net` to the public internet,
 my-AI-stro lives entirely on your machine. The SOT is `backend/memory_store.json`. The audit archive is `backend/archived_store.json`. The Obsidian vault mirror is at `~/Documents/myAIstro-vault/`. The LLMs run via Ollama on the Mac's GPU.
 
 Nothing about any lesson you ingest leaves your computer. There are no telemetry pings, no analytics, no model APIs called outside `localhost`. The trade-off, named honestly: local models have a quality ceiling that hosted GPT-4-class models don't. For a personal study tool — where privacy, zero usage caps, and no vendor lock-in matter — that ceiling is acceptable.
-
----
-
-## AI-assistance disclosure
-
-This project was built in a heavy LLM-pair-programming workflow. Every architectural decision was discussed and refined through long iterative conversations with an LLM coding assistant before being committed. The author drives the vision, names the principles, and decides what's "right"; the LLM helps explore implementations, surface tradeoffs, and accelerate the drafting work.
-
-I'm naming this explicitly because it's central to the project, not despite it. **The skill being demonstrated here is not "I wrote every line by hand" — it's "I can articulate exactly what I want, recognize when the model's first take is wrong, drive the iteration toward the right answer, and maintain a coherent architectural vision across thousands of lines of code."** That's the AI Software Engineering skill my program is training me toward, and this project is the exercise.
-
-The commenting voice you'll find in the code — and the design principles like "trust isolation," "the deterministic scaffold," "the model proposes; Python disposes" — emerged from those conversations. They're mine in the sense that they're the principles I *recognized* as right and chose to enshrine. They're the LLM's in the sense that the language got sharpened in dialogue.
-
-For a portfolio reviewer: that's the honest provenance. The architecture is intentional. The decisions are mine. The drafting was assisted.
 
 ---
 

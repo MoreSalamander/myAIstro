@@ -64,6 +64,11 @@ function deepMergeSettings(defaults, overrides) {
 
 // Tuned defaults — snapshot of the user's preferred graph configuration.
 // A fresh load (or "Reset to defaults") drops back to exactly these values.
+// Defaults captured from the project owner's tuned configuration after
+// ~200 lessons accumulated. Cleaner-at-scale aesthetic: labels off,
+// smaller nodes, thinner links, slightly tighter clustering. Anyone
+// clearing localStorage (or visiting through the public tunnel) sees
+// the graph the way the owner has it set.
 const DEFAULT_SETTINGS = {
   filters: {
     enabledCourses: {}, // populated when graph loads (all courses on)
@@ -71,19 +76,19 @@ const DEFAULT_SETTINGS = {
     searchTerm: "",
   },
   display: {
-    showLabels: true,
+    showLabels: false,    // labels off — at 200+ nodes the labels overlap into noise
     showHulls: false,
     showStars: true,
     animatedEdges: false,
     aliveness: true,
-    nodeSize: 1.15,
-    linkWidth: 1,
+    nodeSize: 0.5,        // smaller dots — graph reads less crowded
+    linkWidth: 0.3,       // thin links — concept network visible without dominating
   },
   forces: {
     chargeStrength: -600,
     linkDistance: 300,
-    linkStrength: 0.2,
-    centerStrength: 0.29,
+    linkStrength: 1,       // strong pull between concept-linked lessons → tighter clusters
+    centerStrength: 0.5,   // higher pull toward origin → less drift outward
     velocityDecay: 0.95,
     symmetryStrength: 0,
   },

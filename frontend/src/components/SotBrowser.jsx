@@ -23,6 +23,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { writeFetch } from "../lib/writeAuth";
+import { CodeBlock } from "../lib/markdown";
 
 export default function SotBrowser({ dataVersion = 0 } = {}) {
   const [entries, setEntries] = useState(null);
@@ -421,19 +422,10 @@ function EntryCard({
           {entry.code_blocks?.length > 0 && (
             <Section label="code">
               {entry.code_blocks.map((c, i) => (
-                <pre
-                  key={i}
-                  style={{
-                    background: "rgba(0,0,0,0.4)",
-                    padding: 10,
-                    borderRadius: 6,
-                    overflowX: "auto",
-                    fontSize: 12,
-                    margin: i === 0 ? 0 : "8px 0 0 0",
-                  }}
-                >
-                  {c}
-                </pre>
+                // CodeBlock detects language from the code itself (no
+                // language hints stored on SOT code_blocks) and renders
+                // through the shared Prism/vsc-dark-plus pipeline.
+                <CodeBlock key={i} code={c} />
               ))}
             </Section>
           )}

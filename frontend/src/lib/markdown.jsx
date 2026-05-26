@@ -195,3 +195,176 @@ export function MarkdownBody({ children }) {
     </ReactMarkdown>
   );
 }
+
+
+// =====================================================
+//  CodeBlock + language heuristic
+// =====================================================
+/**
+ * detectLanguage — guess the language of a raw code string.
+ *
+ * The SOT stores code as plain strings without language metadata.
+ * The advisor's markdown output has fenced code blocks with language
+ * tags (and gets accurate highlighting via `mdComponents.code`); the
+ * SOT-direct surfaces (LessonDrawer, SotBrowser, ArchivesPanel) and
+ * the Classroom's EXAMPLE-beat `code` field don't.
+ *
+ * This heuristic checks the most distinctive markers first (HTML
+ * doctype, JSX tags + React imports, Python `def`, etc.) and falls
+ * through to "text" when nothing matches — at which point the
+ * caller suppresses the language chip and renders without
+ * Prism colors. Catches the common cases in the project's actual
+ * lesson content (FE/JS/JSX, Python, HTML, CSS, shell).
+ *
+ * Order matters: more distinctive patterns first, so we don't
+ * misclassify (e.g. JSX before plain JS; HTML before CSS).
+ */
+export function detectLanguage(code) {
+  if (!code) return "text";
+  const s = code.trim();
+
+  // HTML — doctype or html-shaped tags. Most distinctive marker.
+  if (
+    /^<!doctype\s+html/i.test(s) ||
+    /^<html[\s>]/i.test(s) ||
+    /^<(head|body|div|p|h[1-6]|ul|ol|li|table|form|input|button|a)[\s>]/i.test(s)
+  ) {
+    return "html";
+  }
+
+  // CSS — selector { property: value } pattern, no JS keywords
+  if (
+    /^[.#a-zA-Z][\w-]*\s*(\,\s*[.#a-zA-Z][\w-]*\s*)*\{/m.test(s) &&
+    /[a-z-]+\s*:\s*[^;{}\n]+;/.test(s) &&
+    !/=>|function\s+\w+\s*\(|const\s+\w+\s*=/.test(s)
+  ) {
+    return "css";
+  }
+
+  // JSX — React imports, capitalized component tags, or JSX returns
+  if (
+    /\bimport\s+(React|\{[^}]*\})\s+from\s+["']react["']/i.test(s) ||
+    /<[A-Z]\w*[\s/>]/.test(s) ||
+    (/return\s*\(\s*</.test(s) && /<\/?[a-z]/i.test(s)) ||
+    /useState|useEffect|useRef|useMemo|useCallback/.test(s)
+  ) {
+    return "jsx";
+  }
+
+  // Python — def/class/print/if __name__/imports without "from {} from"
+  if (
+    /^def\s+\w+\s*\(/m.test(s) ||
+    /^class\s+\w+(\([\w.,\s]+\))?\s*:/m.test(s) ||
+    /^if\s+__name__\s*==\s*['"]__main__['"]/m.test(s) ||
+    /^\s*print\s*\(/m.test(s) ||
+    /^import\s+[\w.]+\s*$/m.test(s) ||
+    /^from\s+[\w.]+\s+import\s+/m.test(s)
+  ) {
+    return "python";
+  }
+
+  // JavaScript / TypeScript — function declarations, modern syntax
+  if (
+    /^(function|const|let|var)\s+[\w$]+/m.test(s) ||
+    /=>\s*[{(]/.test(s) ||
+    /^(import|export)\s+/m.test(s) ||
+    /\.then\(|\.catch\(|\bawait\s+/.test(s)
+  ) {
+    // Distinguish TypeScript if explicit type annotations appear
+    if (/:\s*(string|number|boolean|any|void|never|unknown)\b/.test(s)) {
+      return "typescript";
+    }
+    return "javascript";
+  }
+
+  // Shell / bash — common command-line patterns
+  if (
+    /^\$\s+\S/m.test(s) ||
+    /^(npm|node|python|pip|git|cd|ls|mkdir|rm|cp|mv|brew|curl|sudo|chmod|chown|export)\s+/m.test(s)
+  ) {
+    return "bash";
+  }
+
+  // JSON — starts with { or [, has "key": value pattern
+  if (
+    (/^[\s\n]*[{[]/.test(s) && /"[\w-]+"\s*:\s*/.test(s)) &&
+    !/=>|function\s+|const\s+/.test(s)
+  ) {
+    return "json";
+  }
+
+  return "text";
+}
+
+/**
+ * CodeBlock — standalone syntax-highlighted code block.
+ *
+ * Use when you have raw code (not markdown) and want it rendered
+ * with the same visual treatment that fenced code gets inside a
+ * <MarkdownBody/>. Same Prism engine, same vsc-dark-plus theme,
+ * same border and padding — so a code block in the LessonDrawer
+ * looks identical to one in a my-AI-stro Chat response.
+ *
+ * Language detection: if `language` isn't passed, runs the
+ * heuristic above. If the heuristic returns "text" (couldn't
+ * identify a language), the language chip is suppressed and the
+ * block renders as plain monospace with no token coloring.
+ *
+ * @param {object} props
+ * @param {string} props.code        Raw code string.
+ * @param {string} [props.language]  Optional explicit language tag.
+ *                                   If omitted, runs detectLanguage.
+ */
+export function CodeBlock({ code, language }) {
+  if (!code) return null;
+  const detected = language || detectLanguage(code);
+  const showChip = detected !== "text";
+
+  return (
+    <div style={{ position: "relative", margin: "10px 0" }}>
+      {showChip && (
+        <div
+          style={{
+            position: "absolute",
+            top: 6,
+            right: 10,
+            padding: "1px 7px",
+            background: "rgba(0,0,0,0.5)",
+            border: "1px solid rgba(255,255,255,0.12)",
+            borderRadius: 3,
+            fontSize: 9,
+            fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
+            letterSpacing: "0.08em",
+            textTransform: "lowercase",
+            color: "rgba(255,255,255,0.55)",
+            zIndex: 1,
+            pointerEvents: "none",
+            userSelect: "none",
+          }}
+        >
+          {detected}
+        </div>
+      )}
+      <SyntaxHighlighter
+        language={detected}
+        style={vscDarkPlus}
+        PreTag="div"
+        customStyle={{
+          margin: 0,
+          padding: "12px 14px",
+          borderRadius: 6,
+          border: "1px solid rgba(255,255,255,0.08)",
+          fontSize: 12.5,
+          lineHeight: 1.5,
+        }}
+        codeTagProps={{
+          style: {
+            fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
+          },
+        }}
+      >
+        {code.replace(/\n+$/, "")}
+      </SyntaxHighlighter>
+    </div>
+  );
+}

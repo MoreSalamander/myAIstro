@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { BEAT_TYPES, BEAT_TYPE_LABELS, TYPEWRITER_CPS } from "./classroomTypes";
+import { CodeBlock } from "../../lib/markdown";
 
 /**
  * BeatRenderer — chalkboard playback of a single Beat.
@@ -168,21 +169,11 @@ function ExampleBeat({ beat }) {
         {!headDone && <Caret />}
       </div>
       {headDone && beat.code && (
-        <pre
-          style={{
-            background: "rgba(0,0,0,0.4)",
-            border: "1px solid var(--border)",
-            borderRadius: 8,
-            padding: 14,
-            fontSize: 13,
-            color: "rgba(255,255,255,0.88)",
-            overflowX: "auto",
-            margin: "0 0 12px 0",
-            whiteSpace: "pre-wrap",
-          }}
-        >
-          {beat.code}
-        </pre>
+        // Syntax-highlighted via the shared CodeBlock primitive.
+        // Plan beats don't carry a language hint, so detectLanguage
+        // figures it out from the code shape; the chip in the
+        // top-right shows what it landed on (or hides if unknown).
+        <CodeBlock code={beat.code} />
       )}
       {headDone && (
         <div

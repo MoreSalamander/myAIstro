@@ -8,6 +8,12 @@ or the LLM produced flat output.
 Currently handles HTML (the only code shape we've seen in lessons).
 Non-HTML code (JS, CSS, shell, …) passes through unchanged. Add more
 formatters here as new lesson types appear.
+
+Also strips stray language-label first lines (`Jsx\\n<code>`,
+`Python\\ndef foo()`, …) that the LLM pulls in from a markdown fence
+and emits as the first line of a code_blocks entry. Without this,
+render-time language detection sees the label as part of the code
+and falls back to the no-chip "text" path.
 """
 
 import re
@@ -17,6 +23,33 @@ VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img",
     "input", "link", "meta", "source", "track", "wbr",
 }
+
+
+# Allowlist of language labels we'll strip when they appear alone on
+# the first line of a code_blocks entry. Match is case-insensitive.
+# Keep this tight — broadening it to "any short alphabetic token" used
+# to strip legitimate identifiers like character names ("Milo", "Luna",
+# "Moon") that happened to be the first line of a code example.
+_LANGUAGE_LABELS = frozenset({
+    # web
+    "html", "css", "scss", "sass", "less",
+    "js", "javascript", "jsx", "mjs", "cjs",
+    "ts", "typescript", "tsx",
+    "vue", "svelte",
+    # backend
+    "py", "python", "rb", "ruby",
+    "java", "kotlin", "kt", "swift",
+    "go", "golang", "rust", "rs",
+    "c", "cpp", "c++", "cs", "csharp", "php",
+    # shell
+    "sh", "bash", "zsh", "fish", "shell", "ps1", "powershell",
+    # data / config
+    "json", "yaml", "yml", "xml", "toml", "ini", "env",
+    "sql", "graphql", "gql",
+    # misc
+    "text", "plaintext", "plain", "markdown", "md", "mdx",
+    "diff", "patch", "regex",
+})
 
 
 def format_code_block(text: str) -> str:
@@ -40,6 +73,13 @@ def _strip_language_hint(text: str) -> str:
     Drop a single-word language label that the LLM sometimes pulls in
     from a markdown fence (``` html / Html / javascript) and emits as
     the first line of a code_blocks entry.
+
+    Match is gated on _LANGUAGE_LABELS so legitimate code that starts
+    with a short capitalized identifier ("Milo", "None", "Foo") is
+    left alone. Anything left after stripping must still look like
+    code (non-empty), otherwise we leave the entry untouched rather
+    than risk eating a one-line snippet whose entire body happens to
+    spell a language name.
     """
     lines = text.split("\n")
 
@@ -48,14 +88,19 @@ def _strip_language_hint(text: str) -> str:
         return text
 
     first = lines[first_idx].strip()
-    if not re.match(r"^[A-Za-z]{2,15}$", first):
+    if first.lower() not in _LANGUAGE_LABELS:
         return text
 
     rest = "\n".join(lines[first_idx + 1 :]).lstrip()
-    if rest.startswith("<"):
-        return rest
+    if not rest:
+        # The whole "code block" was just the label — almost certainly
+        # an LLM extraction artifact, but stripping it would leave an
+        # empty entry. Drop the original through unchanged and let the
+        # caller decide; the dedup-and-filter passes upstream will
+        # discard empty blocks naturally.
+        return text
 
-    return text
+    return rest
 
 
 def _looks_like_html(text: str) -> bool:

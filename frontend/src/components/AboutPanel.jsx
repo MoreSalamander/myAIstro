@@ -228,7 +228,14 @@ export default function AboutPanel() {
             on malformed plans; grounding is a soft signal (warning
             below 0.5 overall_ratio) that persists with the saved
             plan so the Classroom UI can surface low-grounding plans
-            rather than play them silently.
+            rather than play them silently. The same gate extends to
+            the Teacher's <em>runtime</em> outputs: when a student
+            raises their hand mid-session, the teacher's streamed
+            answer goes through the same combined_report check
+            against the lesson source before it's recorded on the
+            session. Verification stays continuous through the
+            entire teaching session, not just at plan-generation
+            time.
           </p>
           <p>
             The scaffold is where the system gets its reliability. The
@@ -481,9 +488,14 @@ export default function AboutPanel() {
               plays the plan beat-by-beat on a chalkboard — intro,
               exposition, examples, CHECK questions, recap. CHECK
               answers get graded; the teacher gives warm,
-              source-specific corrections. A secondary "Browse all
-              lessons →" link still lets you teach a SOT lesson you
-              haven't saved yet — the one-off escape hatch.
+              source-specific corrections. During any beat the
+              student can click <strong>🙋 Raise hand</strong> and
+              ask the teacher a question; the answer streams in,
+              grounded against the same source the plan was built
+              from, then the student returns to the same beat to
+              continue. A secondary "Browse all lessons →" link still
+              lets you teach a SOT lesson you haven't saved yet — the
+              one-off escape hatch.
             </li>
           </ul>
           <p>
@@ -800,7 +812,7 @@ const AGENTS = [
   ["Quiz Grader",     "Score student answers (separate from gen)",     "mistral:latest"],
   ["General Chat",    "Untethered conversation, no SOT context",       "llama3.2:latest"],
   ["Teacher Aide",    "Generate Classroom lesson plans",               "llama3.2:latest"],
-  ["Teacher",         "Runtime corrections in Classroom",              "llama3.2:latest"],
+  ["Teacher",         "Runtime corrections + raise-hand Q&A in Classroom", "llama3.2:latest"],
   ["Memory Writer",   "Atomic SOT/archive persistence",                "— file I/O"],
 ];
 

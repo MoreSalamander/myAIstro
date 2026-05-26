@@ -181,6 +181,79 @@ The frontend's `ChatPanel.jsx` (for advisor) and `DataFlowCanvas.jsx` (for inges
 
 ---
 
+## The Classroom flow
+
+Where the curation chain ends. The Classroom takes one saved artifact (a Notebook section, or — via the secondary path — a SOT entry directly), turns it into a beat-by-beat teaching plan, and plays the plan back with real-time CHECK grading and mid-session Q&A.
+
+```
+                                ┌────────────────────────┐
+                                │  Classroom picker      │
+                                │  · Notebook (primary)  │
+                                │  · SOT  (secondary)    │
+                                └────────────┬───────────┘
+                                             ▼
+   ┌────────────────────┐         ┌────────────────────┐         ┌────────────────────┐
+   │ generate plan      │ ──────► │   beat playback    │ ──────► │   session end      │
+   │ (Teacher Aide,     │         │   (Teacher,        │         │   (summary stats   │
+   │  llama3.2,         │         │   per-beat render, │         │    persisted)      │
+   │  validated against │         │   CHECK grading,   │         │                    │
+   │  the source)       │         │   raise-hand Q&A)  │         │                    │
+   └────────────────────┘         └────────────────────┘         └────────────────────┘
+```
+
+**Picker — Notebook-listening as primary**
+
+Default entry: `core/notebook_store.list_teachable_sections()` returns every saved section across every saved note, with grounding ratios attached. The UI groups them under collapsible note headers. Per-section action is **🎓 Teach** (fresh — triggers a new plan generation) or **▶ Resume** (cached — loads a previously-generated plan instantly, no LLM call).
+
+The secondary "Browse all lessons →" path falls back to the legacy `LessonPicker` over the full SOT, for the one-off "teach me this lesson I haven't saved yet" case.
+
+**Plan generation — two entry endpoints, one downstream pipeline**
+
+- `POST /api/classroom/plan` — generates from a SOT `event_id`. Legacy/SOT-direct path.
+- `POST /api/classroom/plan-from-section` — generates from a Notebook `(notebook_id, section_index)`. Newer Notebook-derived path. The notebook section's content gets wrapped as the synthetic input to the Teacher Aide.
+
+Both endpoints stream the same NDJSON event shape (`start`, `model_start`, `progress`, `beat`, `done`, `error`), so `ClassroomPanel.jsx` consumes them identically. Both go through `validate_plan(plan, source_text=...)` — structural validation (hard-fail) + grounding gate (soft warning + report attached).
+
+**Beat playback**
+
+`ClassroomPanel.PlayingView` walks through `plan.beats[]` sequentially. Each beat type renders differently in `BeatRenderer.jsx`:
+
+| Beat type | Behavior |
+|---|---|
+| INTRO | Typewriter-style header, then advance |
+| EXPOSITION | Typewriter prose, then advance |
+| EXAMPLE | Prose + syntax-highlighted code block (via the shared `CodeBlock` primitive) + explanation |
+| CHECK | Question typed in, then student answer form mounts; submit grades against `canonical_answer` via the quiz grader (mistral), then the Teacher generates a correction via `phrase_correction` |
+| RECAP | Muted typewriter prose |
+| TRANSITION | Brief connector text |
+
+CHECK answers persist in the session's `events` log with the grader's score, the canonical answer, and the Teacher's correction text.
+
+**Raise-hand Q&A — Teacher v2**
+
+At any beat, the student can click **🙋 Raise hand** to ask a question. `POST /api/classroom/session/raise-hand` resolves the plan's source material (Notebook section content if notebook-derived, SOT entry's `raw_text` if SOT-derived), streams the Teacher's answer via `stream_question_answer`, and runs `combined_report` on the assembled answer against that source. The grounding ratio surfaces as a chip on the answer; the question + answer + grounding report all append to the session record.
+
+Important: the current beat is **not advanced** by the Q&A. After the student clicks "← Continue lesson," they return to the same beat. The session timeline shows the Q&A as a sidebar event, not a beat substitution.
+
+Trust contract preserved: the Teacher's runtime output goes through the same Python grounding gate the plan-generation output does. Verification stays continuous through the entire session, not just at plan-creation time.
+
+**Session persistence**
+
+Sessions are saved as JSON files under `backend/classroom/sessions/`, one file per session. Each session carries:
+
+- `plan_id` and `lesson_event_id` references
+- `current_beat` index for resumption
+- `events[]` log of everything that happened: beat_completed, check_submitted, check_graded, raise_hand_question, raise_hand_answer
+- `summary_stats` for the recap card (CHECK count, pass rate, average score)
+
+Atomic temp-file-and-rename writes, same pattern as the SOT and notebook stores. A crash mid-session leaves the most recently persisted state intact.
+
+**Three pipelines, one event vocabulary**
+
+The Classroom flow is the third major streaming pipeline in the system, alongside the ingest pipeline and the advisor pipeline. All three emit the same NDJSON event grammar: `step_start` / `step_complete` / `token` / `done` / `error`. All three are observed by the same kind of UI layer (a live progress indicator + a streamed body). The pattern is now used three times deliberately — that's "compound AI systems" executed as a system-wide convention, not a one-off scaffolding for ingest.
+
+---
+
 ## Agent roster
 
 Eleven named agents. Each does exactly one thing.
@@ -196,7 +269,7 @@ Eleven named agents. Each does exactly one thing.
 | Quiz Grader | Score student answers (judge-separated) | `agents/quiz_agent.py::grade_answer` | `mistral` |
 | General Chat | Untethered conversation, no SOT grounding | `agents/general_chat_agent.py` | `llama3.2` |
 | Teacher Aide | Generate classroom lesson plans | `agents/teacher_aide_agent.py` | `llama3.2` |
-| Teacher | Runtime corrections during classroom CHECK beats | `agents/teacher_agent.py` | `llama3.2` |
+| Teacher | Runtime classroom interactions: CHECK corrections + raise-hand Q&A | `agents/teacher_agent.py` | `llama3.2` |
 | Memory Writer | Atomic SOT/archive persistence + vault sync | `core/memory_writer_node.py` | pure Python (file I/O) |
 
 **Routing.** All model assignments live in one file: `backend/core/model_router.py`. Changing any agent's model is a single-line edit there; agents import the role they need (`SUMMARIZE`, `ADVISE`, etc.) and never hardcode model names.

@@ -183,7 +183,13 @@ Each of these is a choice, not an omission:
 
 ## Status
 
-This is an active personal project. The architecture is stable; iteration continues on edges (span citations in chat replies, embedding-based paraphrase grounding, spaced-repetition surfacing from the Classroom session signal). Recent direction is captured in the commit history and the in-app About panel.
+This is an active personal project. The architecture is stable; iteration continues on edges.
+
+**Recent direction.** The system's most-distinctive feature now is the **curation chain** — `Ingest → SOT → my-AI-stro Chat → Notebook → Classroom`. Each surface listens to the one before it and produces the input the next one needs; every persistent layer is Python-verified against its source via the shared grounding-check primitive. The Notebook + Classroom-listens-to-Notebook integration is the keystone of that chain: a study guide produced by the advisor pipeline can be saved, then taught back beat-by-beat, with all the intermediate artifacts grounded against the same source.
+
+**Teacher v2.** The Teacher agent graduated from runtime-corrections-only to a real runtime agent. The first v2 feature — **raise-hand answers** (the student can ask the teacher a question mid-session, grounded against the lesson source, with the answer Python-verified just like every other persistent layer) — is live. Two v2 features still queued: re-explain on demand (alt phrasing of the current beat), and improv content generation (adaptive remedial beats after failed CHECKs).
+
+**Edges still being iterated.** Span citations in chat replies; embedding-based paraphrase grounding (substring + token-match catches most cases, but a paraphrase-rephrase that passes prompt-grounding can still slip through); spaced-repetition surfacing from the Classroom session signal (CHECK pass/fail data is already captured; the scheduling layer isn't wired yet).
 
 If you're reading this as a portfolio piece: **the in-app About panel is the most thorough explanation of every design decision.** Once the app is running, navigate to it. It is itself a written artifact of the engineering thinking behind this project.
 

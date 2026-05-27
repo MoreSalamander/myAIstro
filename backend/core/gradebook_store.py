@@ -14,10 +14,11 @@ Storage:
   personal-tool scale (a year of heavy daily use is on the order of
   thousands of records — small enough to rewrite on every append).
 
-Record shape:
+Record shapes (two types, sharing the same log file):
+
+  type=classroom_check   (every MC answer in a Classroom session)
   {
-    "type":             "classroom_check",   # discriminator; Phase 3
-                                             # adds "quiz_attempt"
+    "type":             "classroom_check",
     "ts":               "2026-05-27T...",    # ISO-8601 UTC
     "session_id":       str,
     "plan_id":          str,
@@ -35,6 +36,20 @@ Record shape:
     "passed":           bool,
     "score":            0 | 100,             # deterministic MC grade
     "first_try":        bool,                # mastery signal
+  }
+
+  type=quiz_attempt      (one graded Quiz question)
+  {
+    "type":             "quiz_attempt",
+    "ts":               "2026-05-27T...",
+    "lesson_event_id":  str,
+    "course":           str,
+    "week":             str,
+    "lesson":           str,
+    "question":         str,                 # the question mistral
+                                             # was asked to grade
+    "score":            int,                 # 0-100 from mistral
+    "model":            str,                 # e.g. "mistral"
   }
 
 Design notes:
@@ -146,6 +161,44 @@ def record_check(
         "passed": bool(passed),
         "score": int(score),
         "first_try": bool(first_try),
+    }
+    with _lock:
+        data = _load()
+        data.setdefault("records", []).append(record)
+        data["version"] = _SCHEMA_VERSION
+        _atomic_save(data)
+    return record
+
+
+def record_quiz_attempt(
+    *,
+    lesson_event_id: str,
+    course: str,
+    week: str,
+    lesson: str,
+    question: str,
+    score: int,
+    model: str,
+) -> dict:
+    """
+    Append a quiz_attempt record. One graded Quiz question = one attempt.
+    Best-attempt-wins aggregation happens in core.grading at read time,
+    not here — this module just collects.
+
+    Same non-fatal contract as record_check: the caller (quiz_controller)
+    wraps in try/except so a gradebook write failure can never break
+    the student's quiz-grade response.
+    """
+    record = {
+        "type": "quiz_attempt",
+        "ts": datetime.utcnow().isoformat(),
+        "lesson_event_id": lesson_event_id,
+        "course": course,
+        "week": week,
+        "lesson": lesson,
+        "question": question,
+        "score": int(score),
+        "model": model,
     }
     with _lock:
         data = _load()

@@ -15,13 +15,24 @@
  *   beat_id: string,
  *   type: BEAT_TYPE,
  *   content: string,
- *   // CHECK-only:
+ *   // CHECK-only (multiple choice):
  *   question?: string,
- *   canonical_answer?: string,
- *   expected_concepts?: string[],
+ *   options?: string[],       // 3-5 strings; correct one stored at index 0
+ *                             // in the plan, but shuffled at render time
+ *   correct_index?: number,   // 0-based, against canonical (unshuffled) order
+ *   explanation?: string,     // revealed after the student answers
  *   // EXAMPLE-only:
  *   code?: string | null,
  *   explanation?: string,
+ * }
+ *
+ * CheckResult (per beat, in component state after submit) = {
+ *   selected_index: number,   // shuffled-display index the student picked
+ *   correct_index: number,    // canonical correct index (for compare)
+ *   passed: boolean,
+ *   score: 0 | 100,           // deterministic — exact match wins
+ *   explanation: string,      // shown after the answer
+ *   first_try: boolean,
  * }
  *
  * Session = {
@@ -53,6 +64,3 @@ export const BEAT_TYPE_LABELS = {
 
 // Typewriter speed for chalkboard writing (characters per second)
 export const TYPEWRITER_CPS = 90;
-
-// CHECK passing threshold (0-100 grader scale)
-export const CHECK_PASS_THRESHOLD = 70;

@@ -423,72 +423,86 @@ export default function ClassroomPanel({
   }
 
   // -------- Beat actions --------
+  // CHECK is now multiple choice + deterministic grading. The student
+  // picks an option; we compare its canonical index to the beat's
+  // correct_index. Guests grade entirely client-side (no server round
+  // trip). Owners POST the canonical index so the session log captures
+  // selected_index / correct_index / first_try for the Phase 2
+  // gradebook.
   const submitCheck = useCallback(
-    async (answer) => {
+    async (canonicalIndex) => {
       if (!session || !plan) return;
       const beat = plan.beats[session.current_beat];
       if (!beat || beat.type !== BEAT_TYPES.CHECK) return;
+
+      const correctIndex = beat.correct_index;
+      const passed = canonicalIndex === correctIndex;
+      const score = passed ? 100 : 0;
+      const explanation = beat.explanation || "";
+
+      // Guard against double-submit on the same beat (would mark a
+      // first_try as a retry on the owner path).
+      const prior = checkResultByBeat.get(beat.beat_id);
+      if (prior) return;
+
       try {
-        let data;
         if (!isOwner) {
-          // Guest: hit the public grading endpoint with the canonical
-          // answer the frontend already has. No session record persists.
-          const r = await fetch("/api/classroom/guest/answer", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              event_id: plan.lesson_event_id,
-              question: beat.question || beat.content || "",
-              canonical_answer: beat.canonical_answer || "",
-              user_answer: answer,
-            }),
+          // Guest: pure client-side deterministic grade. No fetch.
+          setCheckResultByBeat((prev) => {
+            const m = new Map(prev);
+            m.set(beat.beat_id, {
+              selected_index: canonicalIndex,
+              correct_index: correctIndex,
+              passed,
+              score,
+              explanation,
+              first_try: true,
+            });
+            return m;
           });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          data = await r.json();
-        } else {
-          const res = await writeFetch("/api/classroom/session/answer", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              session_id: session.session_id,
-              beat_id: beat.beat_id,
-              user_answer: answer,
-            }),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          data = await res.json();
-          if (data.session) setSession(data.session);
-        }
-
-        setCheckResultByBeat((prev) => {
-          const m = new Map(prev);
-          m.set(beat.beat_id, {
-            score: data.score,
-            passed: data.passed,
-            correction: data.correction,
-            canonical_answer: data.canonical_answer,
-          });
-          return m;
-        });
-
-        if (!isOwner) {
-          // Update local stats in guest mode
           setSession((s) => {
             if (!s) return s;
             const stats = { ...(s.summary_stats || {}) };
             stats.checks_total = (stats.checks_total || 0) + 1;
-            if (data.passed) stats.checks_passed = (stats.checks_passed || 0) + 1;
+            if (passed) stats.checks_passed = (stats.checks_passed || 0) + 1;
             const n = stats.checks_total;
             const prevAvg = stats.avg_check_score || 0;
-            stats.avg_check_score = Math.round(prevAvg + (data.score - prevAvg) / n);
+            stats.avg_check_score = Math.round(prevAvg + (score - prevAvg) / n);
             return { ...s, summary_stats: stats };
           });
+          return;
         }
+
+        const res = await writeFetch("/api/classroom/session/answer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: session.session_id,
+            beat_id: beat.beat_id,
+            selected_index: canonicalIndex,
+          }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data.session) setSession(data.session);
+
+        setCheckResultByBeat((prev) => {
+          const m = new Map(prev);
+          m.set(beat.beat_id, {
+            selected_index: data.selected_index,
+            correct_index: data.correct_index,
+            passed: data.passed,
+            score: data.score,
+            explanation: data.explanation,
+            first_try: data.first_try,
+          });
+          return m;
+        });
       } catch (e) {
         setError(e.message ?? String(e));
       }
     },
-    [plan, session, isOwner],
+    [plan, session, isOwner, checkResultByBeat],
   );
 
   const advance = useCallback(async () => {

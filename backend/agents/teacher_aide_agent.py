@@ -18,8 +18,12 @@ Output schema (a dict matching the Plan JSON the frontend consumes):
         "beat_id": str,
         "type": one of INTRO / EXPOSITION / EXAMPLE / CHECK / RECAP / TRANSITION,
         "content": str,
-        # CHECK-only:
-        "question": str, "canonical_answer": str, "expected_concepts": [str],
+        # CHECK-only (multiple choice):
+        "question": str,
+        "options": [str, str, str, str],   # exactly 4
+        "correct_index": int,              # 0-based; correct option lives at index 0
+                                           # in the plan, frontend shuffles at render
+        "explanation": str,                # why the correct answer is right
         # EXAMPLE-only:
         "code": Optional[str], "explanation": str,
       }, ...
@@ -118,10 +122,28 @@ def parse_plan(raw_text: str, entry: Dict) -> Dict:
         # afterward, but a single malformed beat doesn't kill the run.
         if bt == "CHECK":
             beat["question"] = _ensure_str(b.get("question")) or beat["content"]
-            beat["canonical_answer"] = _ensure_str(b.get("canonical_answer")) or ""
-            beat["expected_concepts"] = _ensure_str_list(b.get("expected_concepts"))
-            # Can't play a CHECK without a question and an answer to grade against
-            if not beat["question"].strip() or not beat["canonical_answer"].strip():
+            options = _ensure_str_list(b.get("options"))
+            # Coerce correct_index — model occasionally emits it as a string
+            # ("0") or as a 1-based ordinal. We normalize to a 0-based int
+            # in range; out-of-range or non-int gets the beat dropped below.
+            ci_raw = b.get("correct_index")
+            try:
+                correct_index = int(ci_raw) if ci_raw is not None else -1
+            except (TypeError, ValueError):
+                correct_index = -1
+            beat["options"] = options
+            beat["correct_index"] = correct_index
+            beat["explanation"] = _ensure_str(b.get("explanation")) or ""
+            # Can't play an MC CHECK without a question, ≥3 options, a valid
+            # correct_index, and an explanation. Drop malformed beats here so
+            # the validator only sees structurally-complete ones.
+            if not beat["question"].strip():
+                continue
+            if len(options) < 3 or len(options) > 5:
+                continue
+            if correct_index < 0 or correct_index >= len(options):
+                continue
+            if not beat["explanation"].strip():
                 continue
         elif bt == "EXAMPLE":
             beat["code"] = _ensure_str(b.get("code"))
@@ -175,25 +197,57 @@ Return a single JSON object with this exact shape. Output ONLY the JSON object �
     {{ "type": "EXPOSITION", "content": "2-4 sentences explaining a core concept from the lesson" }},
     {{ "type": "EXAMPLE",    "content": "1 sentence framing", "code": "optional verbatim code from the lesson", "explanation": "2-3 sentences explaining the example" }},
     {{ "type": "EXPOSITION", "content": "explain another concept" }},
-    {{ "type": "CHECK",      "content": "brief framing of the question", "question": "the actual question for the student", "canonical_answer": "the correct answer in 1-3 sentences", "expected_concepts": ["term1", "term2"] }},
+    {{ "type": "CHECK",      "content": "brief framing of the multiple-choice question",
+                              "question": "the actual question",
+                              "options": ["the correct answer (always at index 0)", "plausible wrong answer", "plausible wrong answer", "plausible wrong answer"],
+                              "correct_index": 0,
+                              "explanation": "1-2 sentences explaining why the correct answer is right, drawn from the lesson" }},
     {{ "type": "EXPOSITION", "content": "another concept if useful" }},
-    {{ "type": "CHECK",      "content": "...", "question": "...", "canonical_answer": "...", "expected_concepts": [...] }},
+    {{ "type": "CHECK",      "content": "...", "question": "...", "options": ["...", "...", "...", "..."], "correct_index": 0, "explanation": "..." }},
     {{ "type": "RECAP",      "content": "3-5 sentence summary of takeaways" }}
   ]
 }}
 
-CRITICAL: The shape above is a TEMPLATE for the JSON structure only. Do NOT copy the placeholder text ("term1", "term2", "1-2 sentence opening that frames what the student will learn", "the actual question for the student", "the correct answer in 1-3 sentences", etc.) into your output. Replace every placeholder with real content drawn from the lesson below.
+CRITICAL: The shape above is a TEMPLATE for the JSON structure only. Do NOT copy the placeholder text ("plausible wrong answer", "the actual question", "1-2 sentence opening that frames what the student will learn", etc.) into your output. Replace every placeholder with real content drawn from the lesson below.
 
 REQUIRED PER-BEAT FIELDS — MISSING ANY OF THESE INVALIDATES THE PLAN:
-- Every CHECK beat MUST include both a non-empty "question" string AND a non-empty "canonical_answer" string. Without canonical_answer the CHECK is not gradable and will be discarded.
+- Every CHECK beat MUST include ALL of: a non-empty "question" string, an "options" array of EXACTLY 4 strings, a "correct_index" integer (always 0 — see ordering rule below), and a non-empty "explanation" string.
 - Every EXAMPLE beat MUST include at least one of: "content", "explanation", or "code".
 - Every INTRO / EXPOSITION / RECAP / TRANSITION beat MUST include a non-empty "content" string.
 
+CHECK QUESTION RULES (multiple choice):
+- The "question" field is the actual question. It must be a complete sentence that the student is being asked, usually ending in a question mark. It is NOT a fragment, NOT meta-text like "Pick the right answer", NOT one of the answers. The question describes WHAT is being asked; it does not include any of the options.
+- Worked example of the right SHAPE (use the SHAPE only, do NOT copy this content):
+    GOOD:
+      "question": "When you use a stable id from your data as the key prop instead of the array index, what does React gain?"
+      "options": [
+        "It can correctly identify which items moved or changed when the list updates",
+        "It can render the list in alphabetical order automatically",
+        "It re-renders the entire list every time, but faster",
+        "It avoids needing a key prop at all on future renders"
+      ]
+      "correct_index": 0
+      "explanation": "A stable id lets React match items across renders, so it can update only what changed instead of re-creating the list."
+    BAD (DO NOT DO):
+      "question": "stable id from data"                          <- fragment, not a question
+      "options": ["A. stable id", "B. array index", ...]         <- label-prefixed, not bare answers
+      "options": ["What is a key prop?", "stable id", ...]       <- question shoved into options
+- The "options" array MUST contain exactly 4 ANSWER strings. Each entry is a candidate ANSWER to the question — NOT the question itself, NOT a meta-instruction. Each option is plain text describing one possible answer (e.g. "Inside the <head> because it's metadata, not visible content"). Each option must read as a self-contained answer.
+- Options MUST NOT be prefixed with labels like "A.", "B.", "(1)", "1)", "- ", or "Option 1:". The frontend adds A/B/C/D labels at render time. Your options are bare answer text.
+- ALWAYS put the correct answer first in the "options" array, and ALWAYS set "correct_index" to 0. The frontend shuffles the display order at render time, so the student never sees them in this canonical order — your job is just to list correct-first so the structure is unambiguous.
+- Each distractor MUST be a PLAUSIBLE wrong answer — not obviously off-topic. A student who didn't fully understand the lesson should genuinely consider it. Pick each distractor from one of these patterns:
+    (a) A common misconception the lesson explicitly corrects or warns against.
+    (b) A correct fact about a RELATED-BUT-DIFFERENT concept from the lesson (e.g. if the question is about `append()`, a distractor describing what `extend()` does).
+    (c) A subtly-wrong version of the correct answer (wrong scope, off-by-one, swapped subject/object, returns the wrong type).
+- NEVER use "None of the above", "All of the above", or generic non-answers ("It depends", "Nothing happens", "Maybe", "I'm not sure"). For yes/no questions, use specific qualified statements ("Yes, because the parent owns the data") rather than bare "Yes" / "No".
+- Every option (correct AND distractors) must mention concepts, terms, or behaviors that appear in the lesson source — distractors that invent unrelated topics give the question away.
+- Keep options the same approximate length and grammatical shape. A correct answer that's obviously longer than the distractors leaks the right one.
+- The "explanation" appears AFTER the student answers and tells them why the correct answer is right — ground it in the lesson, 1-2 sentences.
+
 Rules:
-- Required structure: at least 1 INTRO, at least 2 EXPOSITION beats, at least 1 EXAMPLE beat, at least 2 CHECK beats (each with BOTH question AND canonical_answer), exactly 1 RECAP at the end.
+- Required structure: at least 1 INTRO, at least 2 EXPOSITION beats, at least 1 EXAMPLE beat, at least 2 CHECK beats (each fully MC per above), exactly 1 RECAP at the end.
 - 6 to 12 beats total. Aim for 8.
-- CHECK questions must be answerable from the lesson content; the canonical_answer must come from the lesson (1-3 sentences).
-- expected_concepts must be 1-4 short noun phrases drawn from the lesson's actual key concepts when possible.
+- CHECK questions must be answerable from the lesson content; the correct answer must come from the lesson.
 - Do not invent code samples; if EXAMPLE has code, copy it verbatim from the lesson's code blocks.
 - Write in plain, friendly, instructor-style prose. Not bullet points.
 

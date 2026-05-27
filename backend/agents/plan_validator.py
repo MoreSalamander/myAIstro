@@ -6,8 +6,9 @@ malformed or vacuous plans before they get persisted and replayed at
 the user. Two layers of checking:
 
   1. Structural validation — the right beats with required fields
-     populated, the right counts, no missing canonical_answers on
-     CHECK beats, etc. A failure here BLOCKS persistence.
+     populated, the right counts, MC CHECK beats have valid
+     options + correct_index + explanation, etc. A failure here
+     BLOCKS persistence.
 
   2. Grounding validation (optional, when a source is supplied) —
      the Python verification fence at the Teacher-Aide → plan_store
@@ -39,8 +40,19 @@ from core.grounding_check import combined_report
 MIN_BEATS = 3
 MAX_BEATS = 18
 MIN_EXPOSITION = 1
-MIN_CHECK = 1
+# CHECK count matters more in MC world — every CHECK is a gradebook
+# signal, and at least 2 per plan gives the gradebook enough to
+# distinguish "got it" from "lucky one-shot."
+MIN_CHECK = 2
 MIN_CONTENT_CHARS = 20
+
+# Options that look like the model leaked label prefixes ("A.", "(1)",
+# "Option 2:", "- "). The frontend renders A/B/C/D at display time, so
+# any of these in the stored option text is a bug — strip-or-reject.
+_OPTION_LABEL_PREFIX_RE = __import__("re").compile(
+    r"^\s*(?:[A-D][.)\]:]|\(?\d+[.)\]:]|Option\s+\d|[-*]\s)",
+    __import__("re").IGNORECASE,
+)
 
 
 def validate_plan(plan: Dict, source_text: Optional[str] = None) -> Dict:
@@ -51,7 +63,8 @@ def validate_plan(plan: Dict, source_text: Optional[str] = None) -> Dict:
       - plan is a JSON object with a `beats` array
       - beat count between MIN_BEATS (3) and MAX_BEATS (18)
       - each beat is a typed object with the per-type required fields:
-          * CHECK     → question + canonical_answer (both non-empty)
+          * CHECK     → question + options (3-5 unique strings) +
+                        valid correct_index + explanation
           * EXAMPLE   → at least one of content / explanation / code
           * other     → non-empty content
       - at least MIN_EXPOSITION EXPOSITION beats
@@ -62,8 +75,8 @@ def validate_plan(plan: Dict, source_text: Optional[str] = None) -> Dict:
     NOT block persistence, but the report is returned so the caller
     can surface low-grounding plans or refuse them at the next gate):
       - concatenates each beat's user-visible content fields
-        (content, explanation, canonical_answer) and verifies the
-        substantial-token / code-block subset against `source_text`
+        (content, explanation, code, plus CHECK question + options)
+        and verifies the substantial-token / code-block subset against `source_text`
         using core.grounding_check.combined_report. This is the
         Python verification fence at the Teacher-Aide → plan_store
         boundary, mirroring the advisor-section gate at the
@@ -103,8 +116,68 @@ def validate_plan(plan: Dict, source_text: Optional[str] = None) -> Dict:
         if t == "CHECK":
             if not (b.get("question") or "").strip():
                 errors.append(f"Beat {i} CHECK has no question")
-            if not (b.get("canonical_answer") or "").strip():
-                errors.append(f"Beat {i} CHECK has no canonical_answer")
+            # MC schema: options array (3-5) + valid correct_index + explanation
+            options = b.get("options")
+            if not isinstance(options, list):
+                errors.append(f"Beat {i} CHECK has no options array")
+            else:
+                if len(options) < 3 or len(options) > 5:
+                    errors.append(
+                        f"Beat {i} CHECK options length {len(options)} "
+                        f"(must be 3-5)"
+                    )
+                empty = [j for j, o in enumerate(options) if not (isinstance(o, str) and o.strip())]
+                if empty:
+                    errors.append(f"Beat {i} CHECK has empty option(s) at {empty}")
+                # Distractor-quality heuristic: same-text options give the
+                # question away (model produced a duplicate). Case-insensitive
+                # exact-match dedup catches the common "Foo" / "foo" failure.
+                lowered = [o.strip().lower() for o in options if isinstance(o, str)]
+                if len(set(lowered)) < len(lowered):
+                    errors.append(f"Beat {i} CHECK has duplicate options")
+                # Forbidden non-answers — these are always bad MC distractors
+                # and the prompt explicitly tells the model not to use them.
+                forbidden = {
+                    "none of the above", "all of the above", "it depends",
+                    "nothing happens", "maybe", "i'm not sure", "i am not sure",
+                }
+                bad = [o for o in lowered if o in forbidden]
+                if bad:
+                    errors.append(f"Beat {i} CHECK uses forbidden option(s) {bad}")
+                # Option-label leakage: "A. foo", "(1) bar", "Option 2: baz"
+                # — the frontend adds labels; stored options must be bare.
+                labeled = [o for o in options if isinstance(o, str) and _OPTION_LABEL_PREFIX_RE.match(o)]
+                if labeled:
+                    errors.append(
+                        f"Beat {i} CHECK has label-prefixed option(s) — "
+                        f"options must be bare answer text: {labeled[:1]}"
+                    )
+                # Question-as-option: the model sometimes puts the question
+                # itself at index 0 and the real answers in the remaining
+                # slots. Catch the most common shape: an option that ends
+                # with a question mark or is byte-identical to the question.
+                q = (b.get("question") or "").strip()
+                if q:
+                    q_lower = q.lower()
+                    q_leak = [o for o in options if isinstance(o, str) and (
+                        o.strip().lower() == q_lower
+                        or (o.strip().endswith("?") and len(o.strip()) > 10)
+                    )]
+                    if q_leak:
+                        errors.append(
+                            f"Beat {i} CHECK has question-shaped option(s) — "
+                            f"options must be answers, not questions"
+                        )
+            ci = b.get("correct_index")
+            if not isinstance(ci, int):
+                errors.append(f"Beat {i} CHECK correct_index is not an int")
+            elif isinstance(options, list) and (ci < 0 or ci >= len(options)):
+                errors.append(
+                    f"Beat {i} CHECK correct_index {ci} out of range for "
+                    f"{len(options)} options"
+                )
+            if not (b.get("explanation") or "").strip():
+                errors.append(f"Beat {i} CHECK has no explanation")
             if content and len(content) < MIN_CONTENT_CHARS:
                 warnings.append(f"Beat {i} ({t}) content is very short")
         elif t == "EXAMPLE":
@@ -143,15 +216,23 @@ def validate_plan(plan: Dict, source_text: Optional[str] = None) -> Dict:
         # per-beat so a beat with only "ok" or short prose isn't
         # individually flagged for low token count — the question is
         # whether the plan as a whole stayed inside its source.
-        combined_text = "\n\n".join(
-            "\n".join(filter(None, [
+        def _beat_text(b: dict) -> str:
+            parts = [
                 (b.get("content") or "").strip(),
                 (b.get("explanation") or "").strip(),
-                (b.get("canonical_answer") or "").strip(),
                 (b.get("code") or "").strip(),
-            ]))
-            for b in beats
-            if isinstance(b, dict)
+            ]
+            # MC CHECK fields — options + question all need to ground against
+            # the source so distractors don't smuggle in unrelated concepts.
+            if (b.get("type") or "").upper() == "CHECK":
+                parts.append((b.get("question") or "").strip())
+                opts = b.get("options")
+                if isinstance(opts, list):
+                    parts.extend(o.strip() for o in opts if isinstance(o, str) and o.strip())
+            return "\n".join(filter(None, parts))
+
+        combined_text = "\n\n".join(
+            _beat_text(b) for b in beats if isinstance(b, dict)
         )
         grounding_report = combined_report(combined_text, source_text)
         if grounding_report["overall_ratio"] < 0.5:

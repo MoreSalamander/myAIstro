@@ -1,23 +1,25 @@
 """
 Teacher Agent — runtime classroom interactions.
 
-V1 was correction-phrasing only — `phrase_correction` runs after the
-grader scores a CHECK, generating short warm commentary on what the
-student got right or missed.
+V1 was correction-phrasing only — `phrase_correction` ran after the
+LLM grader scored a typed CHECK answer, generating short warm
+commentary on what the student got right or missed. With the Phase 1
+MC CHECK split, grading is now deterministic (selected_index vs
+correct_index) and feedback is the beat's static "explanation" field,
+so phrase_correction is no longer needed and was removed.
 
-V2 (this version) adds the first of the originally-named v2 features:
+V2 added the first non-correction Teacher feature:
 RAISE-HAND ANSWERS. The student can ask a question mid-session and the
-teacher answers grounded in the same lesson's source material. This
-extends the Teacher from "phrase a correction" to "answer questions in
-the source," but keeps the same trust contract — every output is
-grounded in material the student has actually seen.
+teacher answers grounded in the same lesson's source material — same
+trust contract as the rest of the system: every output is grounded in
+material the student has actually seen.
 
 Still planned (future v2 work):
   - Re-explain on demand: alternative phrasing of the current beat
   - Improv content generation: adaptive beats based on student state
     (e.g. remedial EXPOSITION after a failed CHECK)
 
-The new functions stream tokens (matching the advisor + audit pattern)
+These functions stream tokens (matching the advisor + audit pattern)
 so the runtime interactions feel responsive, not "wait 10 seconds for
 the teacher to think."
 """
@@ -27,53 +29,6 @@ from typing import Dict, Iterable
 import ollama
 
 from core.model_router import TEACH
-
-
-def phrase_correction(
-    *,
-    question: str,
-    canonical_answer: str,
-    student_answer: str,
-    score: int,
-    passed: bool,
-) -> str:
-    """
-    Return 2-3 sentences of teacher commentary on the student's answer.
-    Synchronous (not streamed) — answers are short enough that the wait
-    doesn't need a streaming UX in V1.
-    """
-    stance = (
-        "The student got this. Briefly affirm what was right; do not lecture."
-        if passed
-        else "The student missed key parts. Be warm. Name specifically what was missing and direct them to the canonical answer."
-    )
-    prompt = f"""You are a patient classroom teacher giving feedback on a student's answer.
-
-QUESTION: {question}
-
-CANONICAL ANSWER: {canonical_answer}
-
-STUDENT ANSWER: {student_answer}
-
-GRADER SCORE: {score}/100
-PASSED: {passed}
-
-INSTRUCTIONS:
-- {stance}
-- Reply in 2-3 sentences of warm, specific feedback.
-- Do not restate the question. Do not list the score.
-- Do not output JSON, markdown, or any preamble. Plain prose only.
-"""
-    response = ollama.chat(
-        model=TEACH,
-        messages=[{"role": "user", "content": prompt}],
-        options={
-            "num_ctx": 4096,
-            "num_predict": 200,
-            "temperature": 0.4,
-        },
-    )
-    return ((response.get("message") or {}).get("content") or "").strip()
 
 
 def stream_question_answer(

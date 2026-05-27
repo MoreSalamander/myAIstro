@@ -2,20 +2,20 @@
 Guest Classroom endpoints — public, ephemeral, NO persistence.
 
 Used by tunnel visitors who don't have the owner's write password.
-Lets them generate plans and answer CHECK questions without their
-activity ever touching the owner's classroom/plans, classroom/sessions,
-or SOT files.
+Lets them generate plans without their activity ever touching the
+owner's classroom/plans, classroom/sessions, or SOT files.
 
-Two endpoints only:
+Single endpoint:
 
   POST /api/classroom/guest/plan
       body: { event_id }
       returns: { plan }            -- generated and returned in-memory
                                      never written to disk
 
-  POST /api/classroom/guest/answer
-      body: { event_id, question, canonical_answer, user_answer }
-      returns: { score, passed, correction, canonical_answer }
+CHECK grading is now deterministic multiple-choice (selected_index vs
+plan's correct_index), so guest answer-grading happens entirely in the
+guest's frontend with no server round-trip. The old /guest/answer
+endpoint was an LLM grader and has been removed.
 
 Compared to the owner endpoints:
   * No write-password dependency.
@@ -37,8 +37,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from agents.plan_validator import validate_plan
-from agents.quiz_agent import grade_answer
-from agents.teacher_agent import phrase_correction
 from agents.teacher_aide_agent import parse_plan, stream_plan
 
 
@@ -129,39 +127,5 @@ def guest_plan_endpoint(req: GuestPlanRequest):
     return StreamingResponse(stream(), media_type="application/x-ndjson")
 
 
-# =========================================================
-# GUEST ANSWER GRADING  (ephemeral — no session record)
-# =========================================================
-class GuestAnswerRequest(BaseModel):
-    event_id: str
-    question: str
-    canonical_answer: str
-    user_answer: str
-
-
-@router.post("/classroom/guest/answer")
-def guest_answer_endpoint(req: GuestAnswerRequest):
-    entry = _find_entry(req.event_id) or {}
-
-    grade = grade_answer(
-        question=req.question,
-        user_answer=req.user_answer,
-        entry=entry,
-    )
-    score = int(grade.get("score", 0))
-    passed = score >= 70
-
-    correction = phrase_correction(
-        question=req.question,
-        canonical_answer=req.canonical_answer,
-        student_answer=req.user_answer,
-        score=score,
-        passed=passed,
-    )
-
-    return {
-        "score": score,
-        "passed": passed,
-        "correction": correction,
-        "canonical_answer": req.canonical_answer,
-    }
+# Guest answer grading removed — MC grading happens client-side.
+# See module docstring for rationale.

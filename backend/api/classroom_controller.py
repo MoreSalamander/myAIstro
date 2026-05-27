@@ -36,8 +36,7 @@ from core.classroom_store import (
 )
 from core.notebook_store import get_note
 from agents.plan_validator import validate_plan
-from agents.quiz_agent import grade_answer
-from agents.teacher_agent import phrase_correction, stream_question_answer
+from agents.teacher_agent import stream_question_answer
 from agents.teacher_aide_agent import parse_plan, stream_plan
 from core.grounding_check import combined_report
 
@@ -178,9 +177,9 @@ def generate_plan_endpoint(req: PlanRequest):
             progress_buf.clear()
 
             # Auto-retry once on validation failure — most failures are
-            # transient model variance (e.g. it skipped canonical_answer
-            # on every CHECK this run). A single fresh attempt almost
-            # always succeeds.
+            # transient model variance (e.g. it produced 3 options instead
+            # of 4 on a CHECK, or omitted correct_index). A single fresh
+            # attempt almost always succeeds.
             if validation.get("validation") != "PASS":
                 _log(
                     f"plan validation FAIL on attempt 1 — retrying. "
@@ -400,7 +399,7 @@ def session_start_endpoint(req: SessionStartRequest):
 class SessionAnswerRequest(BaseModel):
     session_id: str
     beat_id: str
-    user_answer: str
+    selected_index: int
 
 
 @router.post(
@@ -408,6 +407,15 @@ class SessionAnswerRequest(BaseModel):
     dependencies=[Depends(require_write_password)],
 )
 def session_answer_endpoint(req: SessionAnswerRequest):
+    """
+    Deterministic MC grading. The student picked an option; we compare
+    its index to the plan's canonical correct_index. No LLM call, no
+    grader variance — instant feedback.
+
+    Session events still get written (`check_answered` with selected_index
+    + correct_index + first_try flag) so the Phase 2 gradebook can read
+    them as raw signal.
+    """
     session = load_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -422,39 +430,46 @@ def session_answer_endpoint(req: SessionAnswerRequest):
     if not beat or beat.get("type") != "CHECK":
         raise HTTPException(status_code=400, detail="Beat is not a CHECK")
 
-    question = beat.get("question") or beat.get("content") or ""
-    canonical = beat.get("canonical_answer") or ""
+    options = beat.get("options") or []
+    correct_index = beat.get("correct_index")
+    if not isinstance(correct_index, int) or correct_index < 0 or correct_index >= len(options):
+        raise HTTPException(
+            status_code=409,
+            detail="Beat has no valid correct_index — plan is malformed",
+        )
+    if req.selected_index < 0 or req.selected_index >= len(options):
+        raise HTTPException(
+            status_code=400,
+            detail=f"selected_index {req.selected_index} out of range for {len(options)} options",
+        )
 
-    # Reuse the existing quiz grader. It expects the SOT entry so it can
-    # see summary / concepts / definitions to ground its judgment.
-    entry = _find_entry(session.get("lesson_event_id") or "") or {}
-    grade = grade_answer(
-        question=question,
-        user_answer=req.user_answer,
-        entry=entry,
-    )
-    score = int(grade.get("score", 0))  # 0-100
-    passed = score >= 70
+    passed = req.selected_index == correct_index
+    score = 100 if passed else 0
+    explanation = beat.get("explanation") or ""
 
-    correction = phrase_correction(
-        question=question,
-        canonical_answer=canonical,
-        student_answer=req.user_answer,
-        score=score,
-        passed=passed,
-    )
+    # First-try detection — true iff this beat hasn't been answered in
+    # this session yet. Lays the rails for Phase 2's gradebook mastery
+    # signal without needing any UI change.
+    prior = [
+        e for e in (session.get("events") or [])
+        if e.get("type") == "check_answered" and e.get("beat_id") == req.beat_id
+    ]
+    first_try = not prior
 
-    # Persist the event
     event = {
         "type": "check_answered",
         "beat_id": req.beat_id,
-        "user_answer": req.user_answer,
-        "score": score,
+        "selected_index": req.selected_index,
+        "correct_index": correct_index,
         "passed": passed,
+        "score": score,
+        "first_try": first_try,
     }
     session.setdefault("events", []).append(event)
 
-    # Update summary stats
+    # Update summary stats. checks_total counts attempts; checks_passed
+    # tracks how many distinct CHECK beats the student ended up getting
+    # right (first-try OR retry).
     stats = session.setdefault(
         "summary_stats",
         {"checks_total": 0, "checks_passed": 0, "avg_check_score": 0.0},
@@ -462,7 +477,6 @@ def session_answer_endpoint(req: SessionAnswerRequest):
     stats["checks_total"] = int(stats.get("checks_total", 0)) + 1
     if passed:
         stats["checks_passed"] = int(stats.get("checks_passed", 0)) + 1
-    # Streaming average
     n = stats["checks_total"]
     prev_avg = float(stats.get("avg_check_score", 0.0))
     stats["avg_check_score"] = round(prev_avg + (score - prev_avg) / n, 2)
@@ -472,8 +486,10 @@ def session_answer_endpoint(req: SessionAnswerRequest):
     return {
         "score": score,
         "passed": passed,
-        "correction": correction,
-        "canonical_answer": canonical,
+        "selected_index": req.selected_index,
+        "correct_index": correct_index,
+        "explanation": explanation,
+        "first_try": first_try,
         "session": session,
     }
 

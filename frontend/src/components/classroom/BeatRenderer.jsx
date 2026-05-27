@@ -6,17 +6,23 @@ import { CodeBlock } from "../../lib/markdown";
  * BeatRenderer — chalkboard playback of a single Beat.
  *
  * Typewriter-style writing for all text content. For CHECK beats the
- * student answer form mounts once the question has finished typing.
+ * multiple-choice options appear once the question has finished typing.
+ * Options are shuffled on mount so the student never sees the canonical
+ * plan order (correct-first).
  *
  * Props:
  *   beat:        Beat
- *   onAdvance:   () => void           // hit Next
- *   onSubmit:    (answer) => void     // CHECK answer submitted
- *   onRaiseHand: () => void | null    // open the Q&A overlay (Teacher v2).
- *                                     // null/undefined to hide the button
- *                                     // (guest mode, no session for Q&A).
- *   result:      { score, passed, correction, canonical_answer } | null
- *                — present after a CHECK has been graded
+ *   onAdvance:   () => void                   // hit Next
+ *   onSubmit:    (canonicalIndex) => void     // CHECK answer submitted.
+ *                                             // index is against the plan's
+ *                                             // canonical options order so the
+ *                                             // backend can compare it directly
+ *                                             // to beat.correct_index.
+ *   onRaiseHand: () => void | null            // open the Q&A overlay (Teacher v2).
+ *                                             // null/undefined hides the button
+ *                                             // (guest mode, no session for Q&A).
+ *   result:      { selected_index, correct_index, passed, score, explanation, first_try } | null
+ *                — present after a CHECK has been graded. Indices are canonical.
  */
 export default function BeatRenderer({ beat, onAdvance, onSubmit, result, onRaiseHand }) {
   if (!beat) return null;
@@ -197,15 +203,22 @@ function CheckBeat({ beat, onSubmit, result }) {
   const introDone = introTyped.length >= (beat.content || "").length;
   const qTyped = useTypewriter(introDone ? beat.question || "" : "");
   const qDone = qTyped.length >= (beat.question || "").length;
-  const [answer, setAnswer] = useState("");
-  const [submitting, setSubmitting] = useState(false);
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (!answer.trim() || submitting || result) return;
-    setSubmitting(true);
-    await onSubmit(answer.trim());
-    setSubmitting(false);
+  // Shuffle once per mount via a stable display→canonical index map.
+  // The plan stores options correct-first; we never show that order to
+  // the student. `displayOrder[i]` is the canonical index shown at
+  // display slot i.
+  const options = beat.options || [];
+  const displayOrderRef = useRef(null);
+  if (displayOrderRef.current === null || displayOrderRef.current.length !== options.length) {
+    displayOrderRef.current = shuffledIndices(options.length);
+  }
+  const displayOrder = displayOrderRef.current;
+
+  async function handlePick(displayIdx) {
+    if (result) return;
+    const canonicalIdx = displayOrder[displayIdx];
+    await onSubmit(canonicalIdx);
   }
 
   return (
@@ -230,60 +243,106 @@ function CheckBeat({ beat, onSubmit, result }) {
             lineHeight: 1.5,
             color: "var(--text)",
             fontWeight: 500,
-            marginBottom: 14,
+            marginBottom: 18,
           }}
         >
           {qTyped}
           {!qDone && <Caret />}
         </div>
       )}
-      {qDone && !result && (
-        <form onSubmit={handleSubmit}>
-          <textarea
-            value={answer}
-            onChange={(e) => setAnswer(e.target.value)}
-            placeholder="Type your answer…"
-            disabled={submitting}
-            rows={3}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid var(--border-strong)",
-              borderRadius: 8,
-              color: "var(--text)",
-              outline: "none",
-              fontSize: 14,
-              fontFamily: "inherit",
-              resize: "vertical",
-              boxSizing: "border-box",
-            }}
-          />
-          <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
-            <button
-              type="submit"
-              disabled={!answer.trim() || submitting}
-              style={{
-                padding: "8px 16px",
-                background: submitting
-                  ? "rgba(57,255,20,0.2)"
-                  : "var(--accent-bg)",
-                border: "1px solid var(--accent-soft)",
-                color: "var(--accent)",
-                borderRadius: 6,
-                cursor: submitting ? "wait" : "pointer",
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-                fontWeight: 600,
-                letterSpacing: "0.12em",
-                textTransform: "uppercase",
-                opacity: !answer.trim() ? 0.4 : 1,
-              }}
-            >
-              {submitting ? "Grading…" : "Submit"}
-            </button>
-          </div>
-        </form>
+      {qDone && (
+        <div role="radiogroup" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {displayOrder.map((canonicalIdx, displayIdx) => {
+            const optText = options[canonicalIdx] ?? "";
+            const isAnswered = !!result;
+            const isCorrectOpt = isAnswered && canonicalIdx === result.correct_index;
+            const isPickedOpt = isAnswered && canonicalIdx === result.selected_index;
+
+            // Color logic after answering:
+            //   correct option   → green border + green tint (always)
+            //   picked-wrong     → yellow border + yellow tint
+            //   other distractor → dim
+            // Before answering: neutral, hover-highlight
+            let bg = "rgba(255,255,255,0.03)";
+            let border = "1px solid var(--border-strong)";
+            let textColor = "var(--text)";
+            if (isAnswered) {
+              if (isCorrectOpt) {
+                bg = "rgba(57,255,20,0.08)";
+                border = "1px solid var(--accent-soft)";
+              } else if (isPickedOpt) {
+                bg = "rgba(247,255,0,0.06)";
+                border = "1px solid var(--accent-yellow-soft)";
+              } else {
+                bg = "rgba(255,255,255,0.02)";
+                border = "1px solid var(--border)";
+                textColor = "var(--text-dim)";
+              }
+            }
+
+            return (
+              <button
+                key={canonicalIdx}
+                role="radio"
+                aria-checked={isPickedOpt}
+                onClick={() => handlePick(displayIdx)}
+                disabled={isAnswered}
+                style={{
+                  textAlign: "left",
+                  padding: "12px 14px",
+                  background: bg,
+                  border,
+                  borderRadius: 8,
+                  color: textColor,
+                  cursor: isAnswered ? "default" : "pointer",
+                  fontSize: 14.5,
+                  fontFamily: "inherit",
+                  lineHeight: 1.45,
+                  display: "flex",
+                  gap: 12,
+                  alignItems: "flex-start",
+                  transition: "background 0.12s, border-color 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  if (isAnswered) return;
+                  e.currentTarget.style.background = "rgba(57,255,20,0.04)";
+                  e.currentTarget.style.borderColor = "var(--accent-soft)";
+                }}
+                onMouseLeave={(e) => {
+                  if (isAnswered) return;
+                  e.currentTarget.style.background = "rgba(255,255,255,0.03)";
+                  e.currentTarget.style.borderColor = "var(--border-strong)";
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 11,
+                    letterSpacing: "0.08em",
+                    color: isAnswered
+                      ? isCorrectOpt
+                        ? "var(--accent)"
+                        : isPickedOpt
+                        ? "var(--accent-yellow)"
+                        : "var(--text-mute)"
+                      : "var(--text-mute)",
+                    marginTop: 1,
+                    minWidth: 18,
+                  }}
+                >
+                  {String.fromCharCode(65 + displayIdx)}
+                </span>
+                <span style={{ flex: 1 }}>{optText}</span>
+                {isAnswered && isCorrectOpt && (
+                  <span style={{ color: "var(--accent)", fontWeight: 600 }}>✓</span>
+                )}
+                {isAnswered && isPickedOpt && !isCorrectOpt && (
+                  <span style={{ color: "var(--accent-yellow)", fontWeight: 600 }}>✗</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       )}
       {result && <CheckResult result={result} />}
     </div>
@@ -295,7 +354,7 @@ function CheckResult({ result }) {
   return (
     <div
       style={{
-        marginTop: 6,
+        marginTop: 14,
         padding: 14,
         background: passed
           ? "rgba(57,255,20,0.06)"
@@ -314,42 +373,33 @@ function CheckResult({ result }) {
           marginBottom: 8,
         }}
       >
-        {passed ? `Got it · ${result.score}/100` : `Almost · ${result.score}/100`}
+        {passed ? "Got it" : "Not quite"}
       </div>
-      <div
-        style={{
-          fontSize: 14,
-          lineHeight: 1.55,
-          color: "var(--text)",
-          marginBottom: 10,
-        }}
-      >
-        {result.correction}
-      </div>
-      <div
-        style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: 10,
-          textTransform: "uppercase",
-          letterSpacing: "0.12em",
-          color: "var(--text-mute)",
-          marginBottom: 4,
-        }}
-      >
-        Canonical answer
-      </div>
-      <div
-        style={{
-          fontSize: 13,
-          lineHeight: 1.55,
-          color: "var(--text-dim)",
-          whiteSpace: "pre-wrap",
-        }}
-      >
-        {result.canonical_answer}
-      </div>
+      {result.explanation && (
+        <div
+          style={{
+            fontSize: 14,
+            lineHeight: 1.55,
+            color: "var(--text)",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {result.explanation}
+        </div>
+      )}
     </div>
   );
+}
+
+// Fisher-Yates shuffle of [0, n) — used to randomize MC option display
+// order while preserving the canonical correct_index in the plan.
+function shuffledIndices(n) {
+  const a = Array.from({ length: n }, (_, i) => i);
+  for (let i = n - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
 
 function Caret() {

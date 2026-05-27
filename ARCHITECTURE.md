@@ -223,11 +223,11 @@ Both endpoints stream the same NDJSON event shape (`start`, `model_start`, `prog
 | INTRO | Typewriter-style header, then advance |
 | EXPOSITION | Typewriter prose, then advance |
 | EXAMPLE | Prose + syntax-highlighted code block (via the shared `CodeBlock` primitive) + explanation |
-| CHECK | Question typed in, then student answer form mounts; submit grades against `canonical_answer` via the quiz grader (mistral), then the Teacher generates a correction via `phrase_correction` |
+| CHECK | Multiple choice. Question types in; the 4 options render as a radio-button grid, shuffled on mount via a stable display→canonical index map. The student picks an option; the backend compares its canonical index to the plan's `correct_index` (deterministic, no LLM call). The correct option flashes ✓ green, picked-wrong gets ✗ yellow, the static `explanation` field reveals below. |
 | RECAP | Muted typewriter prose |
 | TRANSITION | Brief connector text |
 
-CHECK answers persist in the session's `events` log with the grader's score, the canonical answer, and the Teacher's correction text.
+CHECK answers persist in the session's `events` log as `check_answered` events carrying `selected_index`, `correct_index`, `passed`, `score` (deterministic 0 or 100), and a `first_try` flag — the rails for a per-lesson gradebook that aggregates these into mastery state. Typed-answer recall lives in the separate Quiz surface, which keeps the LLM grader (mistral) since open-ended answers can't be index-compared.
 
 **Raise-hand Q&A — Teacher v2**
 
@@ -243,7 +243,7 @@ Sessions are saved as JSON files under `backend/classroom/sessions/`, one file p
 
 - `plan_id` and `lesson_event_id` references
 - `current_beat` index for resumption
-- `events[]` log of everything that happened: beat_completed, check_submitted, check_graded, raise_hand_question, raise_hand_answer
+- `events[]` log of everything that happened: `beat_completed`, `check_answered` (with `selected_index` / `correct_index` / `first_try`), `raise_hand_question`, `raise_hand_answer`
 - `summary_stats` for the recap card (CHECK count, pass rate, average score)
 
 Atomic temp-file-and-rename writes, same pattern as the SOT and notebook stores. A crash mid-session leaves the most recently persisted state intact.
@@ -269,7 +269,7 @@ Eleven named agents. Each does exactly one thing.
 | Quiz Grader | Score student answers (judge-separated) | `agents/quiz_agent.py::grade_answer` | `mistral` |
 | General Chat | Untethered conversation, no SOT grounding | `agents/general_chat_agent.py` | `llama3.2` |
 | Teacher Aide | Generate classroom lesson plans | `agents/teacher_aide_agent.py` | `llama3.2` |
-| Teacher | Runtime classroom interactions: CHECK corrections + raise-hand Q&A | `agents/teacher_agent.py` | `llama3.2` |
+| Teacher | Runtime classroom interactions: raise-hand Q&A (CHECK grading is now deterministic; no LLM correction needed) | `agents/teacher_agent.py` | `llama3.2` |
 | Memory Writer | Atomic SOT/archive persistence + vault sync | `core/memory_writer_node.py` | pure Python (file I/O) |
 
 **Routing.** All model assignments live in one file: `backend/core/model_router.py`. Changing any agent's model is a single-line edit there; agents import the role they need (`SUMMARIZE`, `ADVISE`, etc.) and never hardcode model names.
@@ -447,13 +447,13 @@ The project supports a "share with friends" posture via Tailscale Funnel.
 |---|---|---|
 | `/api/sot/graph`, `/api/sot/list`, `/api/sot/archives`, `/api/stats` | read | open |
 | `/api/advisor/chat`, `/api/chat/general`, `/api/quiz/*` | read/inference | open |
-| `/api/classroom/guest/*` | ephemeral guest sessions | open |
+| `/api/classroom/guest/plan` | ephemeral plan generation for tunnel visitors | open |
 | `/api/ingest`, `/api/sot/resummarize`, `/api/sot/sync-obsidian`, `/api/audit/run-once` | mutate | **write-password required** |
 | `/api/classroom/*` (non-guest) | mutate / persistent | **write-password required** |
 
 The owner unlocks once via the UI; the password persists in browser `localStorage` and is attached to every mutating request via `frontend/src/lib/writeAuth.js::writeFetch`.
 
-**Guest Classroom.** Visitors who land on the Tailscale Funnel URL get an ephemeral Classroom mode — they can take guest sessions, but nothing they do persists, and their sessions never touch the audit history or affect future learning signal. See `backend/api/classroom_guest_controller.py`.
+**Guest Classroom.** Visitors who land on the Tailscale Funnel URL get an ephemeral Classroom mode — they can take guest sessions, but nothing they do persists, and their sessions never touch the audit history or affect future learning signal. CHECK grading happens entirely client-side for guests (the MC `selected_index` vs `correct_index` compare is a single line of JS), so there's no per-answer server round-trip — the only guest endpoint is `POST /api/classroom/guest/plan` for ephemeral plan generation. See `backend/api/classroom_guest_controller.py`.
 
 ---
 
@@ -505,7 +505,8 @@ Measured on M4 Pro / 24GB RAM. Numbers are rough.
 
 **Architecture is preparing for** (not yet implemented):
 
-- **Span citations.** Advisor / Quiz Grader / Teacher could return structured `{answer, citations: [{event_id, span}]}` with each cited span substring-verified against the raw lesson. The grounding rules already enforce that the model can only reference material it can point at; the next step is making those pointers explicit in the UI. Touches `agents/advisor_agent.py`, `agents/quiz_agent.py::grade_answer`, `agents/teacher_agent.py::phrase_correction`, plus rendering in `ChatPanel.jsx` and `classroom/BeatRenderer.jsx`.
+- **Span citations.** Advisor / Quiz Grader / Teacher could return structured `{answer, citations: [{event_id, span}]}` with each cited span substring-verified against the raw lesson. The grounding rules already enforce that the model can only reference material it can point at; the next step is making those pointers explicit in the UI. Touches `agents/advisor_agent.py`, `agents/quiz_agent.py::grade_answer`, `agents/teacher_agent.py::stream_question_answer` (raise-hand), plus rendering in `ChatPanel.jsx` and `classroom/BeatRenderer.jsx`.
+- **Persistent gradebook.** Per-CHECK results already persist to the session log as structured `check_answered` events (`selected_index` / `correct_index` / `first_try`). A small gradebook layer can aggregate those into per-lesson grades + mastery state + Quiz-as-extra-credit blending without any further data-collection work. Data layer is the natural first step; the visible UI follows.
 - **Embedding-based paraphrase grounding.** The current grounding check is substring + token-match. Adding an embedding pass (via `nomic-embed-text` through Ollama) would catch paraphrase grounding that the substring check misses. Optional polish.
 - **Spaced-repetition surfacing.** The audit produces a deterministic richness score per version; classroom sessions record which CHECK beats a student got wrong. Combining those signals could schedule specific lessons for re-study at the right intervals.
 - **Cross-lesson synthesis in Classroom.** The Teacher Aide currently builds plans from one SOT entry. Letting it pull from multiple related entries unlocks real curriculum-style teaching.
@@ -515,6 +516,7 @@ Measured on M4 Pro / 24GB RAM. Numbers are rough.
 - Re-ingesting an already-canonical lesson resets that lesson's audit history (the new entry has no `audit_generated` flag, so it becomes the new canonical and the previous audit-generated alternatives stay as siblings until the audit loop walks them).
 - The `aliveness` toggle in the Graph view applies a slow Lissajous wander to the whole formation. With many nodes near the outer boundary at peak wander, nodes on the wander-leading edge can briefly pile against the boundary wall. Not currently a problem at ~200 nodes; could become visually noticeable at higher counts.
 - Classroom plans depend on `llama3.2` producing valid JSON. The plan validator (`agents/plan_validator.py`) and per-beat salvager in `teacher_aide_agent.py::_salvage_beats` handle most malformed outputs, but extreme JSON corruption may still produce plans with fewer beats than the prompt requested.
+- MC distractor quality is a model-quality question, not an architectural one. The validator catches the recurring llama3.2 failure modes (label-prefixed options, question-shaped options, duplicate options, forbidden non-answers) and the controller auto-retries on validation failure, but the prompt continues to iterate on producing consistently-substantive distractors. Lessons with thin source material (very short raw_text) produce the weakest distractors — the model has less to work with.
 
 ---
 

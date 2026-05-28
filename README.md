@@ -68,6 +68,7 @@ Plus an always-available **Chat** (the central hub on the graph) — a natural-l
 - **Grounded by construction.** Validation drops hallucinated bullets at write time; the audit judge actively penalizes ungrounded items in its scoring formula. The system has an opinion about hallucination, and it's negative.
 - **Trust-isolated.** The model responsible for summarizing your notes does only that. It is never the same model that handles ungrounded general chat. The "this entry was carefully extracted" claim stays clean.
 - **Shareable.** A [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) pointed at the dev server gives you a stable public HTTPS URL. Visitors can read, query, and take guest Classroom sessions; only the owner (write-password gated) can ingest or mutate the SOT.
+- **Mobile-ready, installable.** Every surface reflows for phones; the Classroom sidebar collapses into a top progress strip; the home screen swaps the interactive graph for an ambient version with action chips and an on-demand pulse button. Ships as a Progressive Web App — "Add to Home Screen" puts an icon next to your other apps and the system launches full-screen. Aimed at the "scroll your SOT in idle moments" use case rather than parity with desktop.
 - **Obsidian mirror.** Every validated SOT entry is also written to a Markdown vault, so you can browse the notes in any plain-text editor.
 
 ---
@@ -189,9 +190,15 @@ This is an active personal project. The architecture is stable; iteration contin
 
 **Teacher v2.** The Teacher agent graduated from runtime-corrections-only to a real runtime agent. The first v2 feature — **raise-hand answers** (the student can ask the teacher a question mid-session, grounded against the lesson source, with the answer Python-verified just like every other persistent layer) — is live. Two v2 features still queued: re-explain on demand (alt phrasing of the current beat), and improv content generation (adaptive remedial beats after failed CHECKs).
 
-**Classroom CHECKs are now multiple choice.** Typed-answer recall stayed in the Quiz surface; in-flow comprehension checks moved to MC. Grading is deterministic — the student picks an option, the backend compares its canonical index to the plan's `correct_index`, no LLM call. Removes a whole class of "the grader was wrong" frustration from the live teaching path and makes each CHECK a clean signal (`selected_index`, `correct_index`, `first_try`) for the gradebook layer that follows.
+**Classroom CHECKs are now multiple choice.** Typed-answer recall stayed in the Quiz surface; in-flow comprehension checks moved to MC. Grading is deterministic — the student picks an option, the backend compares its canonical index to the plan's `correct_index`, no LLM call. Removes a whole class of "the grader was wrong" frustration from the live teaching path and makes each CHECK a clean signal for the gradebook layer.
 
-**Edges still being iterated.** Span citations in chat replies; embedding-based paraphrase grounding (substring + token-match catches most cases, but a paraphrase-rephrase that passes prompt-grounding can still slip through); MC distractor-quality polish (the validator catches the obvious failure modes — label-prefixed options, question-shaped options, forbidden non-answers — and the controller auto-retries on validation failure, but the prompt continues to iterate on consistently-substantive distractors); a persistent gradebook layer that turns the per-CHECK signal into per-lesson grades, mastery state, and Quiz-as-extra-credit mechanics.
+**Persistent gradebook (data layer).** Every MC CHECK answered in Classroom and every Quiz attempt now appends to a single `backend/gradebook.json` with full identity + first-try flag + score. A pure-Python aggregation module (`core/grading.py`) reads the log and produces per-lesson grades on a "best-session-wins" rule, mastery flags (every CHECK first-try-correct in some session, minimum threshold), and Quiz extra-credit blending capped at +20% over the Classroom base. No visible gradebook UI yet — the data is just accumulating. The UI is the next thing in the queue, designed to render against weeks of real records instead of one-shot test fixtures.
+
+**Mobile experience.** The whole app reflows for phones — compact header with a dropdown nav, full-bleed modals, slide-up LessonDrawer, master-detail surfaces (Notebook, Classroom) collapse their sidebars into top dropdown pickers. The Classroom in-session view becomes a thin top progress strip + full-width beat content. New mobile home screen swaps the interactive graph for an ambient version with action chips (`⚡ Quick Quiz` / `🎓 Teach me something` / `📓 Browse Notebook` / `📚 Browse all lessons`) and an on-demand `✦ Pulse` button — auto-pulses fire every two minutes, the button covers "I want one now." Reachable from a phone on the same tailnet via Tailscale; ships as an installable PWA so the home-screen icon launches full-screen. Aimed at the "scroll your SOT in idle moments instead of doom-scrolling" use case, not desktop parity.
+
+**Quick Quiz mode.** One-tap snacking flow from the mobile home: random canonical lesson, one question, instant grade. Combined random-pick + question-generation endpoint (`/api/quiz/random`) keeps the latency to a single round trip. After a miss (score < 70) the grade card reveals a 2-3 sentence reference answer drawn from the lesson source — closes the "I got it wrong, what should I have said?" loop without a second tap.
+
+**Edges still being iterated.** Span citations in chat replies; embedding-based paraphrase grounding (substring + token-match catches most cases, but a paraphrase-rephrase that passes prompt-grounding can still slip through); MC distractor-quality polish (the validator catches the obvious failure modes — label-prefixed options, question-shaped options, forbidden non-answers — and the controller auto-retries on validation failure, but the prompt continues to iterate on consistently-substantive distractors); the gradebook UI itself; mobile thermal headroom on extended sessions (the home graph still ticks d3 continuously to keep the pulse render loop alive, which leaves room for a future pre-recorded WebM background if the trade-off needs to flip).
 
 If you're reading this as a portfolio piece: **the in-app About panel is the most thorough explanation of every design decision.** Once the app is running, navigate to it. It is itself a written artifact of the engineering thinking behind this project.
 
@@ -206,18 +213,25 @@ If you're reading this as a portfolio piece: **the in-app About panel is the mos
 │   │                        advisor, quiz gen/grade, teacher aide/teacher,
 │   │                        general chat, memory writer)
 │   ├── core/                Pipeline orchestrator, SOT abstractions, auth,
-│   │                        Obsidian sync, classroom store
+│   │                        Obsidian sync, classroom store, notebook store,
+│   │                        gradebook store + grading math
 │   ├── api/                 FastAPI controllers (route → agent wiring)
 │   └── main.py              App entry point, lifespan hooks, route mounting
 ├── frontend/                React (Vite) + Tailwind v4 + react-force-graph-2d
 │   ├── src/
 │   │   ├── components/      One panel per surface (Graph, List, Chat,
-│   │   │                    Archives, Classroom, About) + shared bits
-│   │   ├── lib/             Small utilities (write-password client, etc.)
+│   │   │                    Archives, Notebook, Classroom, About) + the
+│   │   │                    mobile home panel + shared bits
+│   │   ├── lib/             Small utilities (write-password client,
+│   │   │                    useMediaQuery hook, markdown renderer)
 │   │   ├── App.jsx          Routing between panels, ingest modal mounting,
-│   │   │                    write-password unlock
+│   │   │                    write-password unlock, mobile/desktop layout fork
 │   │   └── main.jsx         Vite entry
-│   └── vite.config.js       Dev server config, /api/* proxy, host allowlist
+│   ├── public/              Static assets — PWA manifest + brand icons
+│   │                        (regenerate via scripts/generate-pwa-icons.py)
+│   ├── scripts/             Build-time helpers (PWA icon generator)
+│   └── vite.config.js       Dev server config (binds 0.0.0.0 for LAN/tailnet
+│                            access), /api/* proxy, host allowlist
 ├── ARCHITECTURE.md          Engineer-level deep dive
 ├── docs/STYLE.md            Commenting voice this codebase follows
 ├── LICENSE                  MIT

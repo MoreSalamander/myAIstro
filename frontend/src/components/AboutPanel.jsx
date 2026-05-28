@@ -487,13 +487,19 @@ export default function AboutPanel() {
               Python-validate it against the section). The Teacher
               plays the plan beat-by-beat on a chalkboard — intro,
               exposition, examples, CHECK questions, recap. CHECK
-              answers get graded; the teacher gives warm,
-              source-specific corrections. During any beat the
-              student can click <strong>🙋 Raise hand</strong> and
-              ask the teacher a question; the answer streams in,
+              questions are <strong>multiple choice</strong>: you pick
+              an option, the backend compares its canonical index to
+              the plan's correct_index — deterministic grade, no LLM
+              call, no grader variance. Wrong answers reveal a short
+              explanation grounded in the lesson source. During any
+              beat the student can click <strong>🙋 Raise hand</strong>{" "}
+              and ask the teacher a question; the answer streams in,
               grounded against the same source the plan was built
               from, then the student returns to the same beat to
-              continue. A secondary "Browse all lessons →" link still
+              continue. Every CHECK answered also appends to a
+              persistent gradebook log (selected_index, correct_index,
+              first_try) — the data layer the gradebook UI will read
+              from. A secondary "Browse all lessons →" link still
               lets you teach a SOT lesson you haven't saved yet — the
               one-off escape hatch.
             </li>
@@ -505,12 +511,20 @@ export default function AboutPanel() {
           </p>
           <ul style={listStyle}>
             <li>
-              <strong>Quiz Me</strong> — recall test. A question is
-              generated from a SOT entry; you answer; the grader
-              scores 0–100 with itemized corrections. Doesn't persist
-              a learning artifact — it's exercise, not curation. Uses
-              llama3.2 to generate the question and mistral to grade
-              the answer (the LLM-as-judge separation rule in action).
+              <strong>Quiz Me</strong> — typed-answer recall test. A
+              question is generated from a SOT entry; you answer; the
+              grader scores 0–100 with itemized corrections. When the
+              score is below passing, the grade card reveals a 2-3
+              sentence reference answer drawn straight from the
+              lesson source — closes the "what should I have said?"
+              loop without a second tap. Uses llama3.2 to generate
+              the question and mistral to grade the answer (the
+              LLM-as-judge separation rule in action). Mobile's
+              <strong>Quick Quiz</strong> chip skips the picker
+              entirely: random lesson, one question, ~1 minute round
+              trip — the snacking format. Every grade also lands in
+              the gradebook log as a quiz_attempt record, contributing
+              up to +20% extra credit to its lesson's grade.
             </li>
             <li>
               <strong>General Chat</strong> — untethered conversation.
@@ -812,7 +826,7 @@ const AGENTS = [
   ["Quiz Grader",     "Score student answers (separate from gen)",     "mistral:latest"],
   ["General Chat",    "Untethered conversation, no SOT context",       "llama3.2:latest"],
   ["Teacher Aide",    "Generate Classroom lesson plans",               "llama3.2:latest"],
-  ["Teacher",         "Runtime corrections + raise-hand Q&A in Classroom", "llama3.2:latest"],
+  ["Teacher",         "Raise-hand Q&A in Classroom (CHECK grading is deterministic — no LLM)", "llama3.2:latest"],
   ["Memory Writer",   "Atomic SOT/archive persistence",                "— file I/O"],
 ];
 

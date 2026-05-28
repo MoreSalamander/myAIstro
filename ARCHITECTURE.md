@@ -7,15 +7,19 @@ Topics, in order:
 1. [System overview](#system-overview)
 2. [The Source of Truth (SOT)](#the-source-of-truth-sot)
 3. [The five-stage ingestion pipeline](#the-five-stage-ingestion-pipeline)
-4. [Agent roster](#agent-roster)
-5. [The Deterministic Scaffold](#the-deterministic-scaffold)
-6. [The self-improving audit loop](#the-self-improving-audit-loop)
-7. [The Judge's scoring formula](#the-judges-scoring-formula)
-8. [The graph visualization](#the-graph-visualization)
-9. [Write protection and tunnel sharing](#write-protection-and-tunnel-sharing)
-10. [Data persistence](#data-persistence)
-11. [Performance characteristics](#performance-characteristics)
-12. [Known limitations and future direction](#known-limitations-and-future-direction)
+4. [The advisor pipeline](#the-advisor-pipeline)
+5. [The Classroom flow](#the-classroom-flow)
+6. [The Gradebook layer](#the-gradebook-layer)
+7. [The mobile experience](#the-mobile-experience)
+8. [Agent roster](#agent-roster)
+9. [The Deterministic Scaffold](#the-deterministic-scaffold)
+10. [The self-improving audit loop](#the-self-improving-audit-loop)
+11. [The Judge's scoring formula](#the-judges-scoring-formula)
+12. [The graph visualization](#the-graph-visualization)
+13. [Write protection and tunnel sharing](#write-protection-and-tunnel-sharing)
+14. [Data persistence](#data-persistence)
+15. [Performance characteristics](#performance-characteristics)
+16. [Known limitations and future direction](#known-limitations-and-future-direction)
 
 ---
 
@@ -254,6 +258,128 @@ The Classroom flow is the third major streaming pipeline in the system, alongsid
 
 ---
 
+## The Gradebook layer
+
+Downstream of both Classroom CHECKs and Quiz attempts. A single append-only event log + a pure-Python aggregation module turn the raw per-answer signal into per-lesson grades, mastery flags, and Quiz-as-extra-credit blending. No LLM, no UI yet — the visible gradebook tab is the next planned surface.
+
+### The store (`core/gradebook_store.py`)
+
+One JSON file at `backend/gradebook.json`, atomic temp+rename writes, threading lock against concurrent appends. Same persistence discipline as `classroom_store` and `notebook_store`.
+
+Records share lesson identity (`course` / `week` / `lesson` / `lesson_event_id`) and a `ts`, but otherwise diverge by type:
+
+```jsonc
+// classroom_check — every MC answer in a Classroom session
+{
+  "type": "classroom_check",
+  "ts": "2026-05-27T...",
+  "session_id": "...", "plan_id": "...", "lesson_event_id": "...",
+  "course": "...", "week": "...", "lesson": "...",
+  "beat_id": "...",
+  "selected_index": 2,   // canonical (against plan order, not shuffled display)
+  "correct_index": 0,
+  "passed": false, "score": 0,
+  "first_try": true      // mastery signal — first attempt at this beat in this session
+}
+
+// quiz_attempt — one graded Quiz question
+{
+  "type": "quiz_attempt",
+  "ts": "...",
+  "lesson_event_id": "...", "course": "...", "week": "...", "lesson": "...",
+  "question": "...",
+  "score": 75,           // 0-100 from mistral
+  "model": "mistral"
+}
+```
+
+Records are appended immediately after their source event has been persisted upstream (session log for CHECKs, quiz grade response for attempts). Writes are wrapped in `try/except` at the controller — gradebook write failures are logged but never fail the student's CHECK submit or quiz grade response. Losing one record is acceptable; surfacing an internal-storage error to the student mid-lesson is not.
+
+### The grading math (`core/grading.py`)
+
+Pure functions, no I/O. `aggregate_lesson(records, lesson_event_id)` and `aggregate_all_lessons(records)` consume raw records and return per-lesson aggregates with this shape:
+
+```jsonc
+{
+  "lesson_event_id": "...",
+  "course": "...", "week": "...", "lesson": "...",
+  "classroom_attempts": int,         // total check_answered ever
+  "classroom_sessions": int,         // distinct session_ids touched
+  "best_session": {                  // the highest-scoring session
+    "score": float,                  // first_try_correct / total × 100
+    "first_try_correct": int,
+    "total": int,
+    "session_id": str
+  },
+  "mastery": bool,                   // exists a session with all-first-try passes
+                                     // and ≥ MASTERY_MIN_CHECKS (2) CHECKs
+  "quiz_attempts": int,
+  "best_quiz_score": int | None,     // max across all attempts
+  "quiz_bonus": float,               // best_quiz × QUIZ_BONUS_MAX_PCT / 100
+  "final_grade": float,              // min(100, best_session.score + quiz_bonus)
+  "last_attempt_at": str | None
+}
+```
+
+The rules in one sentence each:
+
+- **Lesson base score = best session score.** Group CHECKs by session_id, compute `first_try_correct / total_in_session` per session, take the max. Successful retake rewards you; bad retake doesn't punish you. Matches the "best attempt counts" principle.
+- **Mastery = there exists a session where every first-try CHECK passed AND ≥ MASTERY_MIN_CHECKS (default 2) CHECKs were answered.** Single-CHECK fluke can't grant mastery.
+- **Quiz extra credit = `best_quiz_score × QUIZ_BONUS_MAX_PCT / 100`.** Linear scale (a quiz of 50 gives half the max bonus, not zero). Capped at +20% by default.
+- **Final grade = `min(100, lesson_base + quiz_bonus)`.** Bonus can lift a poor Classroom grade meaningfully but can never push past 100.
+
+No tier names (bronze/silver/gold) baked into the math — those are UI-layer mappings from the numeric grade + mastery boolean, left to whatever the gradebook UI eventually decides to render.
+
+### What the layer is NOT
+
+- **No UI yet.** The data accumulates silently. Phase 4 of the gradebook arc adds the visible Gradebook tab, mastery chips in the Notebook + SOT pickers, and the home-page widget.
+- **No averaging across lessons.** There's no overall GPA concept here; that's a UI-layer rollup.
+- **No persistence of user-typed quiz answers.** The record holds the score + question text, not the user's answer text. Trade-off for record size; if "let me see what I typed" becomes a felt need we can revisit.
+
+---
+
+## The mobile experience
+
+The whole app reflows for phones via a single `useIsMobile()` hook (`frontend/src/lib/useMediaQuery.js`, breakpoint 768px). Mobile is treated as its own product context — *grab-and-glance, snacking format* — not as "the desktop UI, smaller."
+
+### The five mobile-only design decisions
+
+1. **Header collapses to a 56px compact bar.** No big brand block, no "SOURCES OF TRUTH" wordmark row. Just the wordmark + a dropdown picker for the six views. The dropdown's labels match the desktop nav order so muscle memory transfers; "Graph" renames to "Home" because the mobile rendering of that view is the dedicated home screen (chips over an ambient graph), not the interactive graph the desktop label implies.
+
+2. **Modals go full-bleed.** The desktop modal's 60+40px padding eats half a phone screen; mobile modals fill the screen with no border, no rounded corners, no glow. Same content, different chrome.
+
+3. **Master-detail surfaces collapse.** The Notebook (sidebar list + detail) and Classroom in-session view (`LessonPlanSidebar` + `BeatRenderer`) both flip from desktop two-pane layouts to single-pane mobile layouts. The list/sidebar collapses into a top-of-screen dropdown picker that summons the list on tap and dismisses when a row is selected — same idiom used for both. Most recent note auto-selects on mount so the user lands on content, not an empty "pick something" state.
+
+4. **Dedicated mobile home screen.** `MobileHomePanel` renders the GraphPanel in ambient mode (no interaction, slowed pulse) as the background, dimmed to 55% with a radial vignette for chip legibility, and overlays action chips: `⚡ Quick Quiz`, `🎓 Teach me something`, `📓 Browse Notebook`, `📚 Browse all lessons`. Footer shows last-opened lesson + streak count. The whole surface is built for the "I just reached for my phone, suggest something to do" moment.
+
+5. **The ✦ Pulse button.** Top-right of the graph area, ~48px circular, with a 3-second breathing animation (scale + opacity + glow) that runs continuously to advertise interactivity. Tap fires one heartbeat wave across the graph; button enters a 3-second "spent" state during the wave so over-tapping doesn't queue overlapping pulses. The breathing animation is pure CSS (GPU-accelerated, essentially free thermally). Auto-pulses still fire in ambient mode but at 120s intervals (vs the desktop's 3.7s "tide") so the home screen stays cool while still catching the occasional surprise wave.
+
+### Ambient-mode graph
+
+`GraphPanel` accepts an `ambient` prop that:
+
+- Disables pointer interaction at both the wrapper (`pointerEvents: none` so taps fall through to overlaid UI) and the library (`enableNodeDrag={false}`, `enablePointerInteraction={false}`)
+- Hides the Legend, SettingsPanel, and HoverRipple (chrome that would compete with chips for attention)
+- Drops the heartbeat interval to 120000ms (from 3700ms on desktop)
+- Accepts a `pulseSignal` counter that, when incremented, fires one on-demand heartbeat wave — this is the wire from the ✦ button to the graph
+- Takes a `headerOffset` prop so the canvas sizes correctly under the 56px mobile header instead of the 160px desktop one
+
+One thing the ambient mode does NOT do: settle the d3 simulation after warmup. An earlier optimization attempted this (set `cooldownTicks` finite) but broke the pulse render loop — react-force-graph's render cycle is tied to d3 ticks, so when alpha decays to zero the library stops calling the render callbacks and queued pulses never draw. The current implementation accepts continuous d3 ticking as the cost of working pulses; the 16× pulse-frequency reduction (3.7s → 120s) is doing most of the heat-reduction work anyway.
+
+### PWA install
+
+`frontend/public/manifest.webmanifest` + brand-mark icons (192, 512 for Chrome PWA; 180 for iOS apple-touch-icon; 32 + 16 for legacy favicons) make the app installable from Chrome's "Install app" or Safari's "Add to Home Screen." Standalone display mode means the home-screen icon launches into a full-screen app without browser chrome. Theme color, background color, status-bar styling all match the system dark palette.
+
+Icons are generated by `frontend/scripts/generate-pwa-icons.py` from the same brand mark the in-app `Logo` component renders — concentric green rings + bright accent core + subtle halo on dark navy. One script means all sizes stay in lockstep; re-run when the brand mark changes.
+
+### What the mobile build is NOT
+
+- **Not feature parity with desktop.** Ingest is desktop-only (paste-a-long-lesson-into-a-textarea is a desktop activity). Interactive Graph manipulation is desktop-only (force-graph + touch + small screen is a poor experience). These are deliberate omissions, not gaps.
+- **Not service-worker backed.** The app needs the Mac on and the backend reachable; nothing works offline. Adding a service worker for offline reads is a possible v2 but adds complexity not justified for a personal tool.
+- **Not exhaustively polished.** The structural responsive pass (M2) made every panel reflow correctly but only the most-used surfaces (Notebook, Classroom, mobile home) got detailed touch-target / sizing tuning. Other panels (Chat, About, Archives, List, the picker variants) work but may have rough edges; surgical fixes happen as real-device testing surfaces them.
+
+---
+
 ## Agent roster
 
 Eleven named agents. Each does exactly one thing.
@@ -446,7 +572,7 @@ The project supports a "share with friends" posture via Tailscale Funnel.
 | Endpoint | Mode | Auth |
 |---|---|---|
 | `/api/sot/graph`, `/api/sot/list`, `/api/sot/archives`, `/api/stats` | read | open |
-| `/api/advisor/chat`, `/api/chat/general`, `/api/quiz/*` | read/inference | open |
+| `/api/advisor/chat`, `/api/chat/general`, `/api/quiz/question`, `/api/quiz/grade`, `/api/quiz/random` | read/inference | open |
 | `/api/classroom/guest/plan` | ephemeral plan generation for tunnel visitors | open |
 | `/api/ingest`, `/api/sot/resummarize`, `/api/sot/sync-obsidian`, `/api/audit/run-once` | mutate | **write-password required** |
 | `/api/classroom/*` (non-guest) | mutate / persistent | **write-password required** |
@@ -464,6 +590,7 @@ The owner unlocks once via the UI; the password persists in browser `localStorag
 | `backend/memory_store.json` | The SOT — all active lesson entries | gitignored |
 | `backend/archived_store.json` | Entries the audit cycle has retired | gitignored |
 | `backend/visits.json` | Local visit counter | gitignored |
+| `backend/gradebook.json` | Per-CHECK + per-quiz-attempt event log (Phase 2-3) | gitignored |
 | `backend/classroom/plans/*.json` | Persisted classroom lesson plans (one per plan) | gitignored |
 | `backend/classroom/sessions/*.json` | Persisted classroom session records | gitignored |
 | `~/Documents/myAIstro-vault/**/*.md` | Obsidian-style markdown mirror | external to repo |
@@ -506,7 +633,9 @@ Measured on M4 Pro / 24GB RAM. Numbers are rough.
 **Architecture is preparing for** (not yet implemented):
 
 - **Span citations.** Advisor / Quiz Grader / Teacher could return structured `{answer, citations: [{event_id, span}]}` with each cited span substring-verified against the raw lesson. The grounding rules already enforce that the model can only reference material it can point at; the next step is making those pointers explicit in the UI. Touches `agents/advisor_agent.py`, `agents/quiz_agent.py::grade_answer`, `agents/teacher_agent.py::stream_question_answer` (raise-hand), plus rendering in `ChatPanel.jsx` and `classroom/BeatRenderer.jsx`.
-- **Persistent gradebook.** Per-CHECK results already persist to the session log as structured `check_answered` events (`selected_index` / `correct_index` / `first_try`). A small gradebook layer can aggregate those into per-lesson grades + mastery state + Quiz-as-extra-credit blending without any further data-collection work. Data layer is the natural first step; the visible UI follows.
+- **Gradebook UI (Phase 4 of the gradebook arc).** The data layer is live and records accumulate on every Classroom CHECK + Quiz attempt. The visible surface is the natural next step — a transcript view with per-course rollups, mastery chips on every lesson row in the Notebook + SOT pickers, and a home-screen widget showing overall grade. Designed responsive-first so it works on the mobile home from day one.
+- **Spaced-repetition surfacing.** Once the gradebook UI exists, the home (especially mobile) can surface "lessons you haven't touched in 7+ days" or "concepts you've struggled with (low first-try rate)" as additional action chips. Pulls from the gradebook's `last_attempt_at` + per-lesson aggregate data already produced by `core/grading.py`.
+- **Pre-recorded ambient graph loop.** The current mobile ambient graph keeps d3 ticking continuously to keep the pulse render loop alive — acceptable but not ideal thermally. A pre-recorded WebM of one heartbeat cycle, played as a looping `<video>` with hardware decode, would drop home-screen CPU to near zero. Trade-off is a stale snapshot of the SOT (the loop is "your graph as of date X"), so the option is staged behind a real felt need for additional cooling, not pre-emptively swapped.
 - **Embedding-based paraphrase grounding.** The current grounding check is substring + token-match. Adding an embedding pass (via `nomic-embed-text` through Ollama) would catch paraphrase grounding that the substring check misses. Optional polish.
 - **Spaced-repetition surfacing.** The audit produces a deterministic richness score per version; classroom sessions record which CHECK beats a student got wrong. Combining those signals could schedule specific lessons for re-study at the right intervals.
 - **Cross-lesson synthesis in Classroom.** The Teacher Aide currently builds plans from one SOT entry. Letting it pull from multiple related entries unlocks real curriculum-style teaching.

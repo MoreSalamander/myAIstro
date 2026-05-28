@@ -390,9 +390,19 @@ function LessonHeader({ entry, onChange, hideChangeButton = false, kicker }) {
   );
 }
 
+// Show the reference answer when the student didn't earn a passing
+// score. 70 matches the CHECK pass threshold the rest of the system
+// uses — close-but-not-quite (50-69) still triggers a reveal so the
+// student sees a full model answer to compare against their own.
+const QUIZ_PASS_THRESHOLD = 70;
+
 function GradeCard({ grade, onRetry, onSwitch, switchLabel = "Pick different lesson" }) {
   const color =
     grade.score >= 80 ? "#22c55e" : grade.score >= 50 ? "#f59e0b" : "#ef4444";
+  const showCanonical =
+    grade.score < QUIZ_PASS_THRESHOLD &&
+    typeof grade.canonical_answer === "string" &&
+    grade.canonical_answer.trim().length > 0;
   return (
     <div
       style={{
@@ -434,13 +444,58 @@ function GradeCard({ grade, onRetry, onSwitch, switchLabel = "Pick different les
         </BulletSection>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+      {showCanonical && (
+        <ReferenceAnswer text={grade.canonical_answer} />
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
         <button onClick={onRetry} style={primaryBtnStyle}>
           Another question on this lesson
         </button>
         <button onClick={onSwitch} style={ghostBtnStyle}>
           {switchLabel}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// Reference answer block — what the lesson source itself says, framed
+// as a model answer the student can compare against their own. Visually
+// distinct from the existing "what you got right / missed" bullet
+// sections so it reads as "here's the answer," not more critique.
+function ReferenceAnswer({ text }) {
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        padding: 12,
+        background: "rgba(57,255,20,0.05)",
+        border: "1px solid rgba(57,255,20,0.25)",
+        borderRadius: 8,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          fontFamily: "ui-monospace, SFMono-Regular, monospace",
+          letterSpacing: "0.14em",
+          textTransform: "uppercase",
+          color: "var(--accent, #39ff14)",
+          marginBottom: 6,
+        }}
+      >
+        📖 Reference answer · from the lesson source
+      </div>
+      <div
+        style={{
+          fontSize: 14,
+          lineHeight: 1.55,
+          color: "rgba(255,255,255,0.92)",
+          whiteSpace: "pre-wrap",
+        }}
+      >
+        {text}
       </div>
     </div>
   );

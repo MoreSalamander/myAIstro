@@ -80,6 +80,13 @@ Definitions: {' / '.join(definitions) if definitions else "(none)"}
 def grade_answer(question: str, user_answer: str, entry: dict) -> dict:
     """
     Grade the user's answer against the SOT entry source. Score is 0-100.
+
+    Also returns a model `canonical_answer` (2-3 sentences) showing how
+    the lesson source itself answers the question. The frontend reveals
+    this when the score is below the passing threshold so the student
+    can immediately see what a complete answer would have looked like
+    — the "got it wrong, what should I have said?" loop closes here
+    instead of requiring a second round-trip.
     """
 
     summary = entry.get("summary", "")
@@ -95,6 +102,7 @@ RULES:
 - correct_points: short bullets of what the user got right.
 - missed_points: short bullets of important ideas they did NOT mention or got wrong. Empty list if none.
 - feedback: 1-2 sentences of plain-English coaching.
+- canonical_answer: 2-3 sentences showing how the LESSON SOURCE itself answers the question. Plain prose, no bullets, no markdown. Write it as if YOU were the student giving the model answer — first sentence states the core idea, follow-up sentences add the supporting detail the lesson covers. This is what the student should have said to get full credit; it must come strictly from the lesson source.
 - Justify everything from the LESSON SOURCE only.
 
 OUTPUT FORMAT (must match exactly):
@@ -102,7 +110,8 @@ OUTPUT FORMAT (must match exactly):
   "score": 0,
   "feedback": "string",
   "correct_points": ["string"],
-  "missed_points": ["string"]
+  "missed_points": ["string"],
+  "canonical_answer": "string"
 }}
 
 LESSON SOURCE:
@@ -119,7 +128,10 @@ USER'S ANSWER: {user_answer}
         model=GRADE,
         format="json",
         messages=[{"role": "user", "content": prompt}],
-        options={"num_ctx": 8192, "num_predict": 512, "temperature": 0.2},
+        # Bumped num_predict to fit the new canonical_answer field
+        # without truncation. 2-3 sentences + the existing fields is
+        # well under 700 tokens even at verbose mistral output.
+        options={"num_ctx": 8192, "num_predict": 700, "temperature": 0.2},
     )
 
     try:
@@ -133,11 +145,16 @@ USER'S ANSWER: {user_answer}
     except (TypeError, ValueError):
         score = 0
 
+    canonical = parsed.get("canonical_answer")
+    if not isinstance(canonical, str):
+        canonical = ""
+
     return {
         "score": score,
         "feedback": parsed.get("feedback", "Grader output was malformed."),
         "correct_points": parsed.get("correct_points") or [],
         "missed_points": parsed.get("missed_points") or [],
+        "canonical_answer": canonical.strip(),
         "model": GRADE,
         "graded_at": datetime.utcnow().isoformat(),
     }

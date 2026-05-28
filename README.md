@@ -248,12 +248,14 @@ If you're reading this as a portfolio piece: **the in-app About panel is the mos
 
 ## Acknowledgments
 
+- **[Anthropic](https://anthropic.com)** and **[Claude Code](https://claude.com/claude-code)** — the AI pair-programmer that helped move this project from idea to working system. Full disclosure of how that collaboration worked lives in [How this got built](#how-this-got-built--ai-assistance-disclosure) above; the commit log names the specific Claude model on every co-authored commit.
 - **[Ollama](https://ollama.com)** for making local LLM serving boring and reliable.
 - **[Meta AI](https://ai.meta.com)** for Llama 3 and 3.2.
 - **[Mistral AI](https://mistral.ai)** for the Mistral model used as the quiz grader.
 - **[Tailscale](https://tailscale.com)** for the Funnel feature that makes sharing this with friends trivial.
 - **[react-force-graph](https://github.com/vasturiano/react-force-graph)** by Vasco Asturiano — the graph view rides directly on its 2D renderer.
 - The **production-LLM-engineering community** — Simon Willison, Eugene Yan, Hamel Husain, Jason Liu, Chip Huyen, the Berkeley AI Research "compound AI systems" paper — for articulating the patterns this project is an exercise in.
+- **Maestro College / University** — for the AI Software Engineering program that's training me toward the career this project is an exercise of. Education to a brighter future.
 
 ---
 

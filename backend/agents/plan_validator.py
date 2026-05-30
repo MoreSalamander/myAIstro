@@ -31,6 +31,7 @@ Returns:
   }
 """
 
+import re
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -55,7 +56,11 @@ _OPTION_LABEL_PREFIX_RE = __import__("re").compile(
 )
 
 
-def validate_plan(plan: Dict, source_text: Optional[str] = None) -> Dict:
+def validate_plan(
+    plan: Dict,
+    source_text: Optional[str] = None,
+    mastery_goals: Optional[list] = None,
+) -> Dict:
     """
     Gate a Teacher Aide plan before it's persisted.
 
@@ -203,6 +208,29 @@ def validate_plan(plan: Dict, source_text: Optional[str] = None) -> Dict:
     if errors:
         return _fail(errors, warnings)
 
+    # Mastery-goals coverage check. When the source entry has
+    # deterministically-extracted mastery goals (canonical `## Mastery
+    # Goals` pattern), the prompt directs the model to make CHECKs
+    # cover them. The validator's role here is defense-in-depth: if
+    # coverage is poor, emit a warning so the auto-retry path gets a
+    # second chance to produce a covering plan.
+    #
+    # Soft validation, not hard fail — the LLM may paraphrase a goal in
+    # the question (which is fine), making exact-match coverage hard to
+    # detect. A token-overlap signal is the right granularity.
+    mastery_coverage_report = None
+    if mastery_goals and isinstance(mastery_goals, list) and len(mastery_goals) > 0:
+        check_beats = [b for b in beats if isinstance(b, dict) and (b.get("type") or "").upper() == "CHECK"]
+        if check_beats:
+            mastery_coverage_report = _mastery_coverage(check_beats, mastery_goals)
+            if mastery_coverage_report["covered_goals"] < min(2, len(mastery_goals)):
+                warnings.append(
+                    f"Mastery-goal coverage low: only "
+                    f"{mastery_coverage_report['covered_goals']}/"
+                    f"{len(mastery_goals)} goals are referenced by CHECK beats. "
+                    f"Plan may drift from the curriculum's intended assessment focus."
+                )
+
     # Optional Python grounding check against the source the plan was
     # generated from. Soft validation — we attach the report but don't
     # fail the plan. The caller decides what to do with low-grounding
@@ -252,6 +280,8 @@ def validate_plan(plan: Dict, source_text: Optional[str] = None) -> Dict:
     }
     if grounding_report is not None:
         result["grounding_report"] = grounding_report
+    if mastery_coverage_report is not None:
+        result["mastery_coverage_report"] = mastery_coverage_report
     return result
 
 
@@ -262,4 +292,66 @@ def _fail(errors, warnings):
         "errors": errors,
         "warnings": warnings,
         "validated_at": datetime.utcnow().isoformat(),
+    }
+
+
+def _mastery_coverage(check_beats: list, mastery_goals: list) -> dict:
+    """
+    Token-overlap signal between CHECK beats and mastery goals.
+
+    A goal is "covered" if at least one CHECK beat contains 2+ of the
+    goal's substantial tokens (length >= 4, lowercased). This catches
+    paraphrased coverage (the LLM rephrasing the goal as a question)
+    without requiring exact substring match.
+
+    Returns:
+      {
+        "total_goals": int,
+        "covered_goals": int,
+        "per_goal": [{goal, covered: bool, covering_beat_index: int|None}]
+      }
+    """
+    LOOSE_TOKEN_MIN = 4
+    MIN_OVERLAP = 2
+
+    def tokens(s: str) -> set:
+        return {
+            t for t in re.split(r"[^a-z0-9]+", s.lower())
+            if len(t) >= LOOSE_TOKEN_MIN
+        }
+
+    beat_tokens = []
+    for b in check_beats:
+        parts = [
+            (b.get("question") or ""),
+            (b.get("explanation") or ""),
+        ]
+        opts = b.get("options")
+        if isinstance(opts, list):
+            parts.extend(o for o in opts if isinstance(o, str))
+        beat_tokens.append(tokens(" ".join(parts)))
+
+    per_goal = []
+    for g in mastery_goals:
+        if not isinstance(g, str) or not g.strip():
+            continue
+        gtoks = tokens(g)
+        if not gtoks:
+            per_goal.append({"goal": g, "covered": False, "covering_beat_index": None})
+            continue
+        covering = None
+        for i, btoks in enumerate(beat_tokens):
+            if len(gtoks & btoks) >= MIN_OVERLAP:
+                covering = i
+                break
+        per_goal.append({
+            "goal": g,
+            "covered": covering is not None,
+            "covering_beat_index": covering,
+        })
+
+    return {
+        "total_goals": len(per_goal),
+        "covered_goals": sum(1 for g in per_goal if g["covered"]),
+        "per_goal": per_goal,
     }

@@ -185,6 +185,39 @@ def _build_prompt(entry: Dict) -> str:
     key_concepts = ", ".join(entry.get("key_concepts") or [])
     definitions = "\n".join(f"  - {d}" for d in (entry.get("definitions") or []))
     code_blocks = "\n\n".join(entry.get("code_blocks") or [])
+    mastery_goals_list = entry.get("mastery_goals") or []
+    mastery_goals = "\n".join(f"  - {g}" for g in mastery_goals_list)
+
+    # Mastery-goals section in the prompt — included only when the
+    # entry actually has goals (extracted deterministically from the
+    # source). When present, they REPLACE the LLM's judgment about
+    # what to quiz on. The CHECK rules below reference this section
+    # explicitly so the model can't drift to off-topic questions.
+    mastery_goals_block = (
+        f"\nLESSON MASTERY GOALS (extracted verbatim from the source):\n{mastery_goals}\n"
+        if mastery_goals_list else ""
+    )
+
+    # CHECK-binding instruction is conditional. When mastery_goals
+    # exist, CHECKs MUST cover them — they're the curriculum's
+    # authoritative answer to "what should the student know." When
+    # absent, fall back to summary/key_concepts-based generation.
+    if mastery_goals_list:
+        check_binding_rule = (
+            f"\nMASTERY GOAL BINDING (overrides general CHECK selection):\n"
+            f"- The {len(mastery_goals_list)} mastery goals listed above are the "
+            f"curriculum's authoritative \"what to master\" list. Every CHECK in your "
+            f"plan MUST test the student's mastery of one of these specific goals — "
+            f"NOT arbitrary topics from the lesson body.\n"
+            f"- Generate at least {min(len(mastery_goals_list), 2)} CHECK beats; aim "
+            f"to cover as many distinct mastery goals as possible (one goal per CHECK "
+            f"is ideal; reuse only if you exceed the goal count).\n"
+            f"- The CHECK's \"question\" must be answerable directly from the named "
+            f"mastery goal. The \"correct\" option must be drawn from what the lesson "
+            f"says about that goal.\n"
+        )
+    else:
+        check_binding_rule = ""
 
     return f"""You are the Teacher Aide for a personal classroom session. Build a structured Lesson Plan for a 5-10 minute classroom session covering ONE lesson. Stay strictly within the lesson's content; do not invent material that isn't present in the source.
 
@@ -243,7 +276,7 @@ CHECK QUESTION RULES (multiple choice):
 - Every option (correct AND distractors) must mention concepts, terms, or behaviors that appear in the lesson source — distractors that invent unrelated topics give the question away.
 - Keep options the same approximate length and grammatical shape. A correct answer that's obviously longer than the distractors leaks the right one.
 - The "explanation" appears AFTER the student answers and tells them why the correct answer is right — ground it in the lesson, 1-2 sentences.
-
+{check_binding_rule}
 Rules:
 - Required structure: at least 1 INTRO, at least 2 EXPOSITION beats, at least 1 EXAMPLE beat, at least 2 CHECK beats (each fully MC per above), exactly 1 RECAP at the end.
 - 6 to 12 beats total. Aim for 8.
@@ -267,6 +300,7 @@ LESSON DEFINITIONS:
 
 LESSON CODE BLOCKS:
 {code_blocks}
+{mastery_goals_block}
 
 LESSON RAW TEXT:
 {raw}

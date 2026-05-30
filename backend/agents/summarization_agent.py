@@ -16,6 +16,7 @@ import sys
 from datetime import datetime
 
 from core.code_format import format_code_block
+from core.mastery_extractor import extract_mastery_goals
 from core.model_router import SUMMARIZE as MODEL
 
 
@@ -45,12 +46,19 @@ def summarize_lesson(raw_text: str) -> dict:
     -------
     dict
         {
-          "summary":      "<4-8 sentence prose explanation>",
-          "key_concepts": ["..."],
-          "definitions":  ["term — explanation", ...],
-          "code_blocks":  ["...", ...],
-          "generated_at": "<ISO-8601 UTC>",
+          "summary":       "<4-8 sentence prose explanation>",
+          "key_concepts":  ["..."],
+          "definitions":   ["term — explanation", ...],
+          "code_blocks":   ["...", ...],
+          "mastery_goals": ["..."],  # deterministic — see below
+          "generated_at":  "<ISO-8601 UTC>",
         }
+
+    Note on mastery_goals: extracted deterministically by
+    `core.mastery_extractor` from the raw_text. The LLM has NO role
+    in producing this field — the methodology explicitly forbids it
+    ("don't let the model guess"). Empty list when the canonical
+    `## Mastery Goals` pattern isn't present in the source.
 
     Behavior notes:
       - Empty / whitespace-only input returns the empty-shape early.
@@ -77,6 +85,7 @@ def summarize_lesson(raw_text: str) -> dict:
             "key_concepts": [],
             "definitions": [],
             "code_blocks": [],
+            "mastery_goals": [],
             "generated_at": datetime.utcnow().isoformat()
         }
 
@@ -202,11 +211,18 @@ LESSON:
         key=lambda c: c.strip(),
     )
 
+    # Mastery goals — deterministic sidecar extraction over the raw
+    # source. The LLM has no role here; the extractor either matches
+    # the canonical `## Mastery Goals` pattern or returns []. See
+    # core/mastery_extractor.py for the contract.
+    mastery_goals = extract_mastery_goals(raw_text)
+
     return {
         "summary": _unwrap_nested_summary(_ensure_str(parsed.get("summary"))),
         "key_concepts": _ensure_list_of_str(parsed.get("key_concepts")),
         "definitions": _ensure_list_of_str(parsed.get("definitions")),
         "code_blocks": code_blocks,
+        "mastery_goals": mastery_goals,
         "generated_at": datetime.utcnow().isoformat(),
     }
 
@@ -490,11 +506,18 @@ def _summarize_chunked(raw_text: str) -> dict:
         key=lambda c: c.strip(),
     )
 
+    # Run the mastery-goals extractor against the FULL raw_text (not
+    # the chunked partials) since the canonical `## Mastery Goals`
+    # block is typically at the very end of the lesson — and chunking
+    # would have placed it in a single partial anyway.
+    mastery_goals = extract_mastery_goals(raw_text)
+
     return {
         "summary": summary,
         "key_concepts": key_concepts,
         "definitions": definitions,
         "code_blocks": code_blocks,
+        "mastery_goals": mastery_goals,
         "generated_at": datetime.utcnow().isoformat(),
     }
 

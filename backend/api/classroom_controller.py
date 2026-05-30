@@ -161,7 +161,11 @@ def generate_plan_endpoint(req: PlanRequest):
             elif evt["type"] == "error":
                 return None, {"validation": "FAIL", "errors": [evt["message"]]}
         plan = parse_plan(raw_full, entry)
-        return plan, validate_plan(plan)
+        # Pass the entry's deterministic mastery_goals to the validator so
+        # plans that fail to cover them get flagged for the auto-retry path.
+        # Empty list when the entry pre-dates the canonical convention; the
+        # check becomes a no-op in that case.
+        return plan, validate_plan(plan, mastery_goals=entry.get("mastery_goals") or [])
 
     def stream():
         try:

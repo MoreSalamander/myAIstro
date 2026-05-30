@@ -52,6 +52,13 @@ def write_to_memory(event, summary_data, validation_data):
         "definitions": summary_data.get("definitions"),
         "code_blocks": summary_data.get("code_blocks"),
 
+        # Deterministic sidecar — extracted verbatim from raw_text by
+        # core.mastery_extractor when the canonical `## Mastery Goals`
+        # pattern is present. Empty list otherwise. The LLM has no
+        # role in this field; downstream surfaces (Classroom CHECK
+        # generation, Quiz prioritization) treat it as authoritative.
+        "mastery_goals": summary_data.get("mastery_goals") or [],
+
         "validation_score": validation_data.get("score"),
         "created_at": datetime.utcnow().isoformat(),
     }

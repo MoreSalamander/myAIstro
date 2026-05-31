@@ -223,12 +223,42 @@ def validate_plan(
         check_beats = [b for b in beats if isinstance(b, dict) and (b.get("type") or "").upper() == "CHECK"]
         if check_beats:
             mastery_coverage_report = _mastery_coverage(check_beats, mastery_goals)
-            if mastery_coverage_report["covered_goals"] < min(2, len(mastery_goals)):
-                warnings.append(
-                    f"Mastery-goal coverage low: only "
-                    f"{mastery_coverage_report['covered_goals']}/"
-                    f"{len(mastery_goals)} goals are referenced by CHECK beats. "
-                    f"Plan may drift from the curriculum's intended assessment focus."
+            n_total = mastery_coverage_report["total_goals"]
+            n_covered = mastery_coverage_report["covered_goals"]
+            # When the entry has mastery goals, the binding is a HARD
+            # contract. Incomplete coverage or inconsistent bindings
+            # promote to errors (not warnings) so the controller's
+            # single-retry path triggers. The auto-retry usually
+            # produces a cleaner plan on the second attempt; if it
+            # ALSO fails, the user sees an explicit error rather than
+            # a silently-broken plan.
+            if n_covered < n_total:
+                uncovered = [
+                    g["goal"] for g in mastery_coverage_report["per_goal"]
+                    if not g["covered"]
+                ]
+                errors.append(
+                    f"Mastery-goal coverage incomplete: "
+                    f"{n_covered}/{n_total} goals have a bound CHECK. "
+                    f"Uncovered: {uncovered}"
+                )
+            # Inconsistent bindings — a CHECK that CLAIMS to test
+            # goal #N but whose question doesn't share any
+            # substantial token with the goal text. The model is
+            # lying about the binding, which is the exact failure
+            # mode the verification script surfaced. Hard fail →
+            # retry.
+            inconsistent = [
+                g for g in mastery_coverage_report["per_goal"]
+                if g["covered"] and g["binding_consistent"] is False
+            ]
+            if inconsistent:
+                errors.append(
+                    f"Mastery-goal binding inconsistent: {len(inconsistent)} CHECK(s) "
+                    f"claim to test a goal but the question doesn't share any "
+                    f"substantial tokens with that goal. The model lied about "
+                    f"the binding. Inconsistent goals: "
+                    f"{[g['goal'][:60] for g in inconsistent]}"
                 )
 
     # Optional Python grounding check against the source the plan was
@@ -271,6 +301,20 @@ def validate_plan(
                 f"Ungrounded sample: {grounding_report['text']['ungrounded_sample'][:5]}"
             )
 
+    # Late-stage error check — mastery and grounding sections may have
+    # appended errors after the initial structural check returned. Any
+    # errors at this point still need to FAIL the validation so the
+    # controller's auto-retry triggers. The mastery/grounding reports
+    # are attached to the failure dict too so consumers can see what
+    # was wrong even when validation failed.
+    if errors:
+        fail_result = _fail(errors, warnings)
+        if grounding_report is not None:
+            fail_result["grounding_report"] = grounding_report
+        if mastery_coverage_report is not None:
+            fail_result["mastery_coverage_report"] = mastery_coverage_report
+        return fail_result
+
     result = {
         "validation": "PASS",
         "score": 1.0 if not warnings else 0.85,
@@ -297,22 +341,36 @@ def _fail(errors, warnings):
 
 def _mastery_coverage(check_beats: list, mastery_goals: list) -> dict:
     """
-    Token-overlap signal between CHECK beats and mastery goals.
+    Structural coverage check using the `mastery_goal_index` field on
+    each CHECK beat. A goal is "covered" if at least one CHECK has a
+    `mastery_goal_index` that points at it AND the CHECK's question
+    contains at least one substantial token from the goal (sanity
+    check that the model isn't lying about the binding).
 
-    A goal is "covered" if at least one CHECK beat contains 2+ of the
-    goal's substantial tokens (length >= 4, lowercased). This catches
-    paraphrased coverage (the LLM rephrasing the goal as a question)
-    without requiring exact substring match.
+    The structural index is the primary signal — much stronger than
+    the previous pure-token-overlap version, which gave false
+    positives on incidental word matches. The token check is the
+    secondary sanity gate: it catches the case where the model
+    assigned `mastery_goal_index: 0` but wrote a question about
+    something totally unrelated.
 
     Returns:
       {
-        "total_goals": int,
+        "total_goals":   int,
         "covered_goals": int,
-        "per_goal": [{goal, covered: bool, covering_beat_index: int|None}]
+        "per_goal": [
+          {
+            "goal": str,
+            "goal_index": int,
+            "covered": bool,
+            "covering_beat_index": int | None,
+            "binding_consistent": bool | None,  # None when uncovered
+          }
+        ],
       }
     """
     LOOSE_TOKEN_MIN = 4
-    MIN_OVERLAP = 2
+    SANITY_TOKEN_OVERLAP = 1  # ≥1 substantial token shared = plausible binding
 
     def tokens(s: str) -> set:
         return {
@@ -320,38 +378,50 @@ def _mastery_coverage(check_beats: list, mastery_goals: list) -> dict:
             if len(t) >= LOOSE_TOKEN_MIN
         }
 
-    beat_tokens = []
-    for b in check_beats:
-        parts = [
-            (b.get("question") or ""),
-            (b.get("explanation") or ""),
-        ]
-        opts = b.get("options")
-        if isinstance(opts, list):
-            parts.extend(o for o in opts if isinstance(o, str))
-        beat_tokens.append(tokens(" ".join(parts)))
-
     per_goal = []
-    for g in mastery_goals:
+    for goal_idx, g in enumerate(mastery_goals):
         if not isinstance(g, str) or not g.strip():
             continue
         gtoks = tokens(g)
-        if not gtoks:
-            per_goal.append({"goal": g, "covered": False, "covering_beat_index": None})
-            continue
-        covering = None
-        for i, btoks in enumerate(beat_tokens):
-            if len(gtoks & btoks) >= MIN_OVERLAP:
-                covering = i
+
+        # Primary: structural — find the first CHECK beat that claims
+        # to test this goal via its `mastery_goal_index` field.
+        covering_beat_idx = None
+        binding_consistent = None
+        for i, b in enumerate(check_beats):
+            if b.get("mastery_goal_index") == goal_idx:
+                covering_beat_idx = i
+                # Secondary: sanity-check the binding. The question
+                # text should share at least one substantial token
+                # with the goal it claims to test.
+                beat_text_parts = [
+                    (b.get("question") or ""),
+                    (b.get("explanation") or ""),
+                ]
+                opts = b.get("options")
+                if isinstance(opts, list):
+                    beat_text_parts.extend(
+                        o for o in opts if isinstance(o, str)
+                    )
+                btoks = tokens(" ".join(beat_text_parts))
+                binding_consistent = len(gtoks & btoks) >= SANITY_TOKEN_OVERLAP
                 break
+
         per_goal.append({
             "goal": g,
-            "covered": covering is not None,
-            "covering_beat_index": covering,
+            "goal_index": goal_idx,
+            "covered": covering_beat_idx is not None,
+            "covering_beat_index": covering_beat_idx,
+            "binding_consistent": binding_consistent,
         })
 
+    # A goal is "covered" if a CHECK structurally claims it AND the
+    # binding looks consistent. Inconsistent bindings DO count as
+    # covered for the count, but get surfaced as a warning so the
+    # caller can see the model claimed coverage without delivering.
+    covered_goals = sum(1 for g in per_goal if g["covered"])
     return {
         "total_goals": len(per_goal),
-        "covered_goals": sum(1 for g in per_goal if g["covered"]),
+        "covered_goals": covered_goals,
         "per_goal": per_goal,
     }

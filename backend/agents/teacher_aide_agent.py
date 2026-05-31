@@ -131,8 +131,22 @@ def parse_plan(raw_text: str, entry: Dict) -> Dict:
                 correct_index = int(ci_raw) if ci_raw is not None else -1
             except (TypeError, ValueError):
                 correct_index = -1
+            # Coerce mastery_goal_index — present only when the lesson has
+            # mastery_goals AND the model honored the binding rule. We
+            # preserve None for legacy plans / lessons without goals so
+            # the validator can distinguish "didn't have goals" from
+            # "had goals but model omitted the index."
+            mgi_raw = b.get("mastery_goal_index")
+            if mgi_raw is None:
+                mastery_goal_index = None
+            else:
+                try:
+                    mastery_goal_index = int(mgi_raw)
+                except (TypeError, ValueError):
+                    mastery_goal_index = None
             beat["options"] = options
             beat["correct_index"] = correct_index
+            beat["mastery_goal_index"] = mastery_goal_index
             beat["explanation"] = _ensure_str(b.get("explanation")) or ""
             # Can't play an MC CHECK without a question, ≥3 options, a valid
             # correct_index, and an explanation. Drop malformed beats here so
@@ -199,23 +213,64 @@ def _build_prompt(entry: Dict) -> str:
     )
 
     # CHECK-binding instruction is conditional. When mastery_goals
-    # exist, CHECKs MUST cover them — they're the curriculum's
-    # authoritative answer to "what should the student know." When
-    # absent, fall back to summary/key_concepts-based generation.
+    # exist, CHECKs are bound 1:1 to them by position — much stricter
+    # than the original "aim to cover" version, because verification
+    # showed the LLM ignored loose binding and produced off-topic
+    # CHECKs. When mastery_goals are absent (legacy entries), fall
+    # back to summary/key_concepts-based generation.
     if mastery_goals_list:
-        check_binding_rule = (
-            f"\nMASTERY GOAL BINDING (overrides general CHECK selection):\n"
-            f"- The {len(mastery_goals_list)} mastery goals listed above are the "
-            f"curriculum's authoritative \"what to master\" list. Every CHECK in your "
-            f"plan MUST test the student's mastery of one of these specific goals — "
-            f"NOT arbitrary topics from the lesson body.\n"
-            f"- Generate at least {min(len(mastery_goals_list), 2)} CHECK beats; aim "
-            f"to cover as many distinct mastery goals as possible (one goal per CHECK "
-            f"is ideal; reuse only if you exceed the goal count).\n"
-            f"- The CHECK's \"question\" must be answerable directly from the named "
-            f"mastery goal. The \"correct\" option must be drawn from what the lesson "
-            f"says about that goal.\n"
+        n_goals = len(mastery_goals_list)
+        # Build a numbered list the prompt can refer to by position,
+        # AND a per-goal worked example showing exactly what the CHECK
+        # should look like. The worked examples are the strongest
+        # available constraint — they show the model the desired shape
+        # in concrete terms instead of asking it to infer from rules.
+        numbered_goals = "\n".join(
+            f"  Goal #{i}: {g}" for i, g in enumerate(mastery_goals_list)
         )
+        goal_to_check_map = "\n".join(
+            f"  - The CHECK with mastery_goal_index: {i} tests Goal #{i} (\"{g[:80]}\")"
+            for i, g in enumerate(mastery_goals_list)
+        )
+        check_binding_rule = f"""
+MASTERY GOAL BINDING (REPLACES general CHECK selection — this is a HARD constraint that overrides the JSON template above):
+
+The {n_goals} mastery goals are the curriculum's authoritative "what to master"
+list. CHECK beats are bound 1:1 to mastery goals by position:
+
+{numbered_goals}
+
+⚠️ COUNT OVERRIDE: The JSON template above shows 2 CHECK beats as a shape example,
+but THIS LESSON requires EXACTLY {n_goals} CHECK beats — one per mastery goal.
+IGNORE the template's count; honor the binding rule's count.
+
+Required CHECK-to-goal mapping (EVERY one of these MUST appear in your output):
+
+{goal_to_check_map}
+
+Each CHECK beat MUST include the field `mastery_goal_index` (integer 0–{n_goals - 1})
+indicating which mastery goal it tests.
+
+The CHECK's "question" must DIRECTLY test the bound goal — restate the goal as
+a question the student must answer. Worked example using THIS lesson's Goal #0:
+
+  Goal #0 text:  "{mastery_goals_list[0]}"
+  GOOD question: A direct rephrasing such as "How do you do <Goal #0's action>?"
+  BAD question:  Anything that asks about a related-but-different concept from
+                 elsewhere in the lesson body.
+
+Each option (correct + distractors) must be a complete, accurate sentence
+that COULD be answering the question. The correct option must reflect what
+the lesson says about THAT SPECIFIC goal — not adjacent material.
+
+Compliance checklist before you return the JSON (do this mentally):
+  ✓ Did I generate EXACTLY {n_goals} CHECK beats? (Not 2. Not 3. {n_goals}.)
+  ✓ Does each CHECK have a mastery_goal_index field (0 through {n_goals - 1})?
+  ✓ Do the indices cover every goal exactly once (no duplicates, no gaps)?
+  ✓ Does each question directly test the goal at its mastery_goal_index?
+
+If any answer is "no," fix it before returning.
+"""
     else:
         check_binding_rule = ""
 
@@ -234,9 +289,10 @@ Return a single JSON object with this exact shape. Output ONLY the JSON object �
                               "question": "the actual question",
                               "options": ["the correct answer (always at index 0)", "plausible wrong answer", "plausible wrong answer", "plausible wrong answer"],
                               "correct_index": 0,
+                              "mastery_goal_index": 0,
                               "explanation": "1-2 sentences explaining why the correct answer is right, drawn from the lesson" }},
     {{ "type": "EXPOSITION", "content": "another concept if useful" }},
-    {{ "type": "CHECK",      "content": "...", "question": "...", "options": ["...", "...", "...", "..."], "correct_index": 0, "explanation": "..." }},
+    {{ "type": "CHECK",      "content": "...", "question": "...", "options": ["...", "...", "...", "..."], "correct_index": 0, "mastery_goal_index": 1, "explanation": "..." }},
     {{ "type": "RECAP",      "content": "3-5 sentence summary of takeaways" }}
   ]
 }}
@@ -244,7 +300,7 @@ Return a single JSON object with this exact shape. Output ONLY the JSON object �
 CRITICAL: The shape above is a TEMPLATE for the JSON structure only. Do NOT copy the placeholder text ("plausible wrong answer", "the actual question", "1-2 sentence opening that frames what the student will learn", etc.) into your output. Replace every placeholder with real content drawn from the lesson below.
 
 REQUIRED PER-BEAT FIELDS — MISSING ANY OF THESE INVALIDATES THE PLAN:
-- Every CHECK beat MUST include ALL of: a non-empty "question" string, an "options" array of EXACTLY 4 strings, a "correct_index" integer (always 0 — see ordering rule below), and a non-empty "explanation" string.
+- Every CHECK beat MUST include ALL of: a non-empty "question" string, an "options" array of EXACTLY 4 strings, a "correct_index" integer (always 0 — see ordering rule below), and a non-empty "explanation" string. ADDITIONALLY, when the lesson has mastery goals (see binding rule below if present), each CHECK MUST include a "mastery_goal_index" integer indicating which goal it tests.
 - Every EXAMPLE beat MUST include at least one of: "content", "explanation", or "code".
 - Every INTRO / EXPOSITION / RECAP / TRANSITION beat MUST include a non-empty "content" string.
 

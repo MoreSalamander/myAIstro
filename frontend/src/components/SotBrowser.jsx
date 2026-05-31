@@ -24,6 +24,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { writeFetch } from "../lib/writeAuth";
 import { CodeBlock } from "../lib/markdown";
+import HighlightableText from "./highlights/HighlightableText";
 
 export default function SotBrowser({ dataVersion = 0 } = {}) {
   const [entries, setEntries] = useState(null);
@@ -443,7 +444,7 @@ function EntryCard({
               </div>
             </Section>
           )}
-          {entry.raw_text && <RawLessonSection rawText={entry.raw_text} />}
+          {entry.raw_text && <RawLessonSection rawText={entry.raw_text} entry={entry} />}
           <div
             style={{
               marginTop: 12,
@@ -570,8 +571,53 @@ function RelatedChip({ entry, shared, onJump }) {
   );
 }
 
-function RawLessonSection({ rawText }) {
+function RawLessonSection({ rawText, entry }) {
   const [open, setOpen] = useState(false);
+  const [highlights, setHighlights] = useState([]);
+  const [highlightsLoaded, setHighlightsLoaded] = useState(false);
+
+  // Lazy-fetch highlights the first time the section is opened — keeps
+  // closed cards cheap (most cards stay collapsed) and avoids hammering
+  // /api/highlights when the SOT list has many entries. After the first
+  // fetch, refreshHighlights() is called on every save/delete so the
+  // panel stays in sync with the data layer.
+  const refreshHighlights = useCallback(async () => {
+    if (!entry?.event_id) return;
+    try {
+      const res = await fetch(
+        `/api/highlights/${encodeURIComponent(entry.event_id)}`
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      // Filter to raw_text highlights for this view. notebook_section
+      // highlights for this lesson live in the same file but render in
+      // the Notebook panel only.
+      setHighlights(
+        Array.isArray(data)
+          ? data.filter((h) => h.source_type === "raw_text")
+          : []
+      );
+      setHighlightsLoaded(true);
+    } catch {
+      // Highlight fetch is best-effort; keep prior state on network failure.
+    }
+  }, [entry?.event_id]);
+
+  useEffect(() => {
+    if (open && !highlightsLoaded) {
+      refreshHighlights();
+    }
+  }, [open, highlightsLoaded, refreshHighlights]);
+
+  const sourceRef = useMemo(
+    () => ({
+      course: entry?.course,
+      week: entry?.week,
+      lesson: entry?.lesson,
+    }),
+    [entry?.course, entry?.week, entry?.lesson]
+  );
+
   return (
     <div style={{ marginTop: 12 }}>
       <button
@@ -593,9 +639,20 @@ function RawLessonSection({ rawText }) {
         }}
       >
         {open ? "▾" : "▸"} Original lesson
+        {highlights.length > 0 && (
+          <span
+            style={{
+              marginLeft: 8,
+              color: "rgba(57,255,20,0.65)",
+              fontSize: 10,
+            }}
+          >
+            · {highlights.length} highlight{highlights.length === 1 ? "" : "s"}
+          </span>
+        )}
       </button>
       {open && (
-        <pre
+        <div
           onClick={(e) => e.stopPropagation()}
           style={{
             marginTop: 8,
@@ -605,16 +662,20 @@ function RawLessonSection({ rawText }) {
             color: "rgba(255,255,255,0.78)",
             fontSize: 13,
             lineHeight: 1.5,
-            whiteSpace: "pre-wrap",
             fontFamily: "inherit",
             maxHeight: 300,
             overflowY: "auto",
-            margin: "8px 0 0 0",
-            cursor: "text",
           }}
         >
-          {rawText}
-        </pre>
+          <HighlightableText
+            text={rawText}
+            highlights={highlights}
+            lessonEventId={entry?.event_id}
+            sourceType="raw_text"
+            sourceRef={sourceRef}
+            onChange={refreshHighlights}
+          />
+        </div>
       )}
     </div>
   );

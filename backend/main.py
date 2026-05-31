@@ -65,6 +65,7 @@ from api.general_chat_controller import router as general_chat_router
 from api.classroom_controller import router as classroom_router
 from api.classroom_guest_controller import router as classroom_guest_router
 from api.notebook_controller import router as notebook_router
+from api.highlights_controller import router as highlights_router
 
 
 # Persistence target for the inline endpoints (graph, stats, resummarize).
@@ -133,6 +134,7 @@ app.include_router(general_chat_router, prefix="/api")
 app.include_router(classroom_router, prefix="/api")
 app.include_router(classroom_guest_router, prefix="/api")
 app.include_router(notebook_router, prefix="/api")
+app.include_router(highlights_router, prefix="/api")
 
 
 # =========================================================

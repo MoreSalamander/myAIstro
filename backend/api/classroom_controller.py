@@ -40,6 +40,7 @@ from agents.plan_validator import validate_plan
 from agents.teacher_agent import stream_question_answer
 from agents.teacher_aide_agent import parse_plan, stream_plan
 from core.grounding_check import combined_report
+from core.highlights_store import list_highlights_for_lesson_by_color
 
 
 router = APIRouter()
@@ -111,6 +112,52 @@ def _log(msg: str) -> None:
     print(f"[classroom] {msg}", file=sys.stderr, flush=True)
 
 
+def _merged_mastery_goals(event_id: str, base_goals) -> list:
+    """
+    Authority hierarchy for mastery goals at Classroom-plan time:
+
+      1. Green user-highlights for this lesson  (strongest — manual assertion)
+      2. Deterministic mastery_goals extracted from the lesson recap
+
+    This function unions both, with deterministic goals first (they
+    came from the curriculum's own ## Mastery Goals block) and green
+    highlights appended after (the user's "I want this tested" mark).
+    Duplicates are removed by case-insensitive stripped text — so a
+    user who green-highlights a passage that's already in the canonical
+    recap doesn't double-count it.
+
+    Why merge here (controller) instead of in teacher_aide_agent: the
+    teacher_aide_agent stays a pure entry→plan function and doesn't
+    need to know that highlights exist. The controller is the right
+    place to compose data sources before handing the assembled view
+    to the agent.
+
+    Returns a list of strings (the mastery-goal texts), never None.
+    """
+    base = list(base_goals or [])
+    if not event_id:
+        return base
+    try:
+        green = list_highlights_for_lesson_by_color(event_id, "green")
+    except Exception:
+        # Highlights are a soft enhancement — never break plan
+        # generation because the highlights file is corrupt.
+        return base
+
+    seen = {g.strip().lower() for g in base if isinstance(g, str) and g.strip()}
+    merged = list(base)
+    for h in green:
+        text = (h.get("text") or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(text)
+    return merged
+
+
 # =========================================================
 # READS
 # =========================================================
@@ -148,10 +195,17 @@ def generate_plan_endpoint(req: PlanRequest):
     if not entry:
         raise HTTPException(status_code=404, detail="Lesson not found")
 
+    # H2e: union deterministic mastery_goals + green highlights for
+    # this lesson. We mutate a shallow copy of entry so the agent and
+    # validator see the merged set without touching the SOT on disk.
+    merged_goals = _merged_mastery_goals(req.event_id, entry.get("mastery_goals"))
+    enriched_entry = dict(entry)
+    enriched_entry["mastery_goals"] = merged_goals
+
     def _attempt(emit_progress):
         """One generation attempt. Returns (plan_or_None, validation_dict)."""
         raw_full = ""
-        for evt in stream_plan(entry):
+        for evt in stream_plan(enriched_entry):
             if evt["type"] == "raw_chunk":
                 emit_progress()
             elif evt["type"] == "raw_done":
@@ -160,12 +214,13 @@ def generate_plan_endpoint(req: PlanRequest):
                 pass  # caller-side already signaled
             elif evt["type"] == "error":
                 return None, {"validation": "FAIL", "errors": [evt["message"]]}
-        plan = parse_plan(raw_full, entry)
-        # Pass the entry's deterministic mastery_goals to the validator so
-        # plans that fail to cover them get flagged for the auto-retry path.
-        # Empty list when the entry pre-dates the canonical convention; the
-        # check becomes a no-op in that case.
-        return plan, validate_plan(plan, mastery_goals=entry.get("mastery_goals") or [])
+        plan = parse_plan(raw_full, enriched_entry)
+        # Pass the merged mastery_goals to the validator so plans that
+        # fail to cover them (including user-highlighted goals) get
+        # flagged for the auto-retry path. Empty list when the entry
+        # pre-dates the canonical convention AND has no highlights;
+        # the check becomes a no-op in that case.
+        return plan, validate_plan(plan, mastery_goals=merged_goals)
 
     def stream():
         try:
@@ -282,8 +337,19 @@ def generate_plan_from_section_endpoint(req: PlanFromSectionRequest):
     # the resulting plan stays referentially tied to the canonical
     # SOT lesson the section was derived from.
     section_content = section.get("content") or ""
+    section_event_id = section.get("event_id")
+
+    # H2e: pull the SOT entry's deterministic mastery_goals AND merge
+    # in this lesson's green highlights. The notebook-section path
+    # historically had no mastery_goals (synthetic_entry sets none),
+    # so wiring this here is a strict upgrade — section-derived plans
+    # now respect the same authority hierarchy as SOT-entry plans.
+    sot_entry = _find_entry(section_event_id) if section_event_id else None
+    base_goals = (sot_entry or {}).get("mastery_goals") or []
+    merged_goals = _merged_mastery_goals(section_event_id, base_goals)
+
     synthetic_entry = {
-        "event_id": section.get("event_id"),
+        "event_id": section_event_id,
         "course": section.get("course"),
         "week": section.get("week"),
         "lesson": section.get("lesson"),
@@ -296,6 +362,9 @@ def generate_plan_from_section_endpoint(req: PlanFromSectionRequest):
         "key_concepts": [],
         "definitions": [],
         "code_blocks": [],
+        # Carry the merged mastery_goals so the Teacher Aide's prompt
+        # gets the CHECK-binding constraint here too.
+        "mastery_goals": merged_goals,
     }
 
     def _attempt(emit_progress):
@@ -310,9 +379,13 @@ def generate_plan_from_section_endpoint(req: PlanFromSectionRequest):
             elif evt["type"] == "error":
                 return None, {"validation": "FAIL", "errors": [evt["message"]]}
         plan = parse_plan(raw_full, synthetic_entry)
-        # KEY DIFFERENCE from the SOT-entry path: pass section_content
-        # as source_text so validate_plan runs its new grounding pass.
-        return plan, validate_plan(plan, source_text=section_content)
+        # Pass BOTH source_text (for grounding pass) AND mastery_goals
+        # (for coverage check). The section path uniquely runs both.
+        return plan, validate_plan(
+            plan,
+            source_text=section_content,
+            mastery_goals=merged_goals,
+        )
 
     def stream():
         try:

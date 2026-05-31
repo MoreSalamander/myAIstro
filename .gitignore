@@ -40,3 +40,6 @@ backend/classroom/sessions/
 
 # Notebook artifacts — runtime-generated, may contain personal content
 backend/notebook/
+
+# Highlights — user-marked passages, personal study annotations
+backend/highlights/

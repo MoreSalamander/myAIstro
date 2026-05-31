@@ -31,8 +31,9 @@
  *                                          LessonDrawer in response.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { MarkdownBody } from "../lib/markdown";
+import HighlightableText from "./highlights/HighlightableText";
 import { writeFetch } from "../lib/writeAuth";
 import { useIsMobile } from "../lib/useMediaQuery";
 
@@ -853,6 +854,108 @@ function PieceBlock({ piece, pieceIndex, notebookId, onSelectLesson, onTeachSect
         ? "rgba(247,255,0,0.4)"  // medium — yellow
         : "rgba(239,68,68,0.45)"; // low — red
     return (
+      <SectionPiece
+        piece={piece}
+        pieceIndex={pieceIndex}
+        notebookId={notebookId}
+        ratio={ratio}
+        groundingColor={groundingColor}
+        onSelectLesson={onSelectLesson}
+        onTeachSection={onTeachSection}
+        isLast={isLast}
+      />
+    );
+  }
+  // arc and recap — plain framing paragraphs, no source chip
+  return (
+    <div style={{ marginBottom: isLast ? 0 : 24 }}>
+      <MarkdownBody>{piece.content}</MarkdownBody>
+      {!isLast && (
+        <hr style={{
+          border: 0,
+          borderTop: "1px solid rgba(255,255,255,0.08)",
+          margin: "24px 0 0",
+        }} />
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+//  SectionPiece — section render with optional highlight mode
+// ============================================================
+//
+// Default view: rendered markdown via MarkdownBody (unchanged from
+// pre-H2 behavior). When the user toggles "Highlight," the body
+// swaps to a HighlightableText view of the raw markdown source
+// (piece.content), where text selection produces a colored highlight
+// stored against the parent lesson.
+//
+// Why raw-markdown selection (not selection over the rendered HTML):
+// the rendered DOM has nested block-level elements (paragraphs, lists,
+// code blocks) which break the linear-offset model HighlightableText
+// uses. Highlighting against the raw markdown is the simplest correct
+// thing — the user reads the rendered view, switches to highlight mode
+// when they want to mark a passage, and the highlight is stored
+// verbatim against that raw text so it survives section reorderings.
+function SectionPiece({
+  piece,
+  pieceIndex,
+  notebookId,
+  ratio,
+  groundingColor,
+  onSelectLesson,
+  onTeachSection,
+  isLast,
+}) {
+  const [highlightMode, setHighlightMode] = useState(false);
+  const [highlights, setHighlights] = useState([]);
+  const [highlightsLoaded, setHighlightsLoaded] = useState(false);
+
+  const refreshHighlights = useCallback(async () => {
+    if (!piece.event_id) return;
+    try {
+      const res = await fetch(
+        `/api/highlights/${encodeURIComponent(piece.event_id)}`
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      // Filter to highlights authored against THIS notebook section —
+      // a single lesson's highlights file mixes raw_text + every notebook
+      // section that references it.
+      const onlyThisSection = Array.isArray(data)
+        ? data.filter(
+            (h) =>
+              h.source_type === "notebook_section" &&
+              h.source_ref?.notebook_id === notebookId &&
+              h.source_ref?.section_index === pieceIndex
+          )
+        : [];
+      setHighlights(onlyThisSection);
+      setHighlightsLoaded(true);
+    } catch {
+      // best-effort
+    }
+  }, [piece.event_id, notebookId, pieceIndex]);
+
+  // Eager-fetch highlights once so the count chip is accurate without
+  // needing the user to open highlight mode first.
+  useEffect(() => {
+    if (!highlightsLoaded) refreshHighlights();
+  }, [highlightsLoaded, refreshHighlights]);
+
+  const sourceRef = useMemo(
+    () => ({
+      course: piece.course,
+      week: piece.week,
+      lesson: piece.lesson,
+      notebook_id: notebookId,
+      section_index: pieceIndex,
+    }),
+    [piece.course, piece.week, piece.lesson, notebookId, pieceIndex]
+  );
+
+  return (
       <div style={{ marginBottom: isLast ? 0 : 24 }}>
         {/* Chip row: source + teach */}
         <div
@@ -942,8 +1045,66 @@ function PieceBlock({ piece, pieceIndex, notebookId, onSelectLesson, onTeachSect
               🎓 Teach me this
             </button>
           )}
+          {/* Highlight-mode toggle — swaps the body between rendered
+              markdown and a raw-text view where the user can select
+              passages to highlight. Only meaningful when there's a
+              backing lesson event_id (cascade target for the highlight). */}
+          {piece.event_id && (
+            <button
+              onClick={() => setHighlightMode((v) => !v)}
+              title={
+                highlightMode
+                  ? "Exit highlight mode — back to rendered view"
+                  : "Enter highlight mode — select passages to mark"
+              }
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "3px 9px",
+                background: highlightMode
+                  ? "rgba(57,255,20,0.18)"
+                  : "rgba(255,255,255,0.04)",
+                border: highlightMode
+                  ? "1px solid rgba(57,255,20,0.55)"
+                  : "1px solid rgba(255,255,255,0.18)",
+                borderRadius: 999,
+                fontSize: 10.5,
+                fontFamily: "var(--font-mono)",
+                letterSpacing: "0.06em",
+                color: highlightMode ? "var(--accent)" : "var(--text-dim)",
+                cursor: "pointer",
+                userSelect: "none",
+              }}
+            >
+              ✎ {highlightMode ? "Reading mode" : "Highlight mode"}
+              {highlights.length > 0 && (
+                <span
+                  style={{
+                    fontSize: 9.5,
+                    color: "rgba(255,255,255,0.55)",
+                    marginLeft: 2,
+                  }}
+                >
+                  · {highlights.length}
+                </span>
+              )}
+            </button>
+          )}
         </div>
-        <MarkdownBody>{piece.content}</MarkdownBody>
+        {highlightMode ? (
+          <HighlightableText
+            text={piece.content}
+            highlights={highlights}
+            lessonEventId={piece.event_id}
+            sourceType="notebook_section"
+            sourceRef={sourceRef}
+            onChange={refreshHighlights}
+            className="notebook-highlight-surface"
+          />
+        ) : (
+          <MarkdownBody>{piece.content}</MarkdownBody>
+        )}
         {!isLast && (
           <hr style={{
             border: 0,
@@ -953,18 +1114,4 @@ function PieceBlock({ piece, pieceIndex, notebookId, onSelectLesson, onTeachSect
         )}
       </div>
     );
-  }
-  // arc and recap — plain framing paragraphs, no source chip
-  return (
-    <div style={{ marginBottom: isLast ? 0 : 24 }}>
-      <MarkdownBody>{piece.content}</MarkdownBody>
-      {!isLast && (
-        <hr style={{
-          border: 0,
-          borderTop: "1px solid rgba(255,255,255,0.08)",
-          margin: "24px 0 0",
-        }} />
-      )}
-    </div>
-  );
 }

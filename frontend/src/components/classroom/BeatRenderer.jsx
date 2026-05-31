@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BEAT_TYPES, BEAT_TYPE_LABELS, TYPEWRITER_CPS } from "./classroomTypes";
 import { CodeBlock } from "../../lib/markdown";
+import TypingPracticeBeat from "./TypingPracticeBeat";
 
 /**
  * BeatRenderer — chalkboard playback of a single Beat.
@@ -78,6 +79,9 @@ export default function BeatRenderer({ beat, onAdvance, onSubmit, result, onRais
       )}
       {beat.type === BEAT_TYPES.TRANSITION && (
         <BeatBody text={beat.content} muted />
+      )}
+      {beat.type === BEAT_TYPES.TYPING_PRACTICE && (
+        <TypingPracticeBeat beat={beat} />
       )}
 
       {/* Advance affordance — centered under the chalkboard. Hidden

@@ -49,6 +49,19 @@ from core.model_router import TEACH_PLAN
 
 BEAT_TYPES = {"INTRO", "EXPOSITION", "EXAMPLE", "CHECK", "RECAP", "TRANSITION"}
 
+# Beat types we deterministically inject AFTER the LLM returns. These
+# don't go through the LLM (it can't reproduce verbatim code reliably),
+# so they live outside the BEAT_TYPES filter that gates LLM output.
+# The validator still accepts them through its own per-type branches.
+TYPING_PRACTICE = "TYPING_PRACTICE"
+
+
+# Minimum length for a code block to be worth promoting to a typing
+# practice beat. One-liners ("x = 1") are too short to be useful muscle
+# memory practice and just add friction. Tuned by hand — long enough
+# to require thinking, short enough to not feel like punishment.
+_MIN_TYPING_PRACTICE_CHARS = 25
+
 
 def stream_plan(entry: Dict) -> Iterable[Dict]:
     """
@@ -171,6 +184,15 @@ def parse_plan(raw_text: str, entry: Dict) -> Dict:
                 continue
         beats.append(beat)
 
+    # Deterministic post-processing: inject TYPING_PRACTICE beats from
+    # the entry's verbatim code_blocks (extracted during ingestion).
+    # The LLM never sees the typing-practice content — we don't trust
+    # any model to reproduce a code snippet character-perfectly, and
+    # the SOT already holds the canonical version. Insertion happens
+    # before the RECAP beat (so practice is the last skill before the
+    # closing summary) or at the end if no RECAP exists.
+    beats = _inject_typing_practice_beats(beats, entry)
+
     return {
         "plan_id": None,
         "lesson_event_id": entry.get("event_id"),
@@ -185,6 +207,62 @@ def parse_plan(raw_text: str, entry: Dict) -> Dict:
             or _estimate_duration(beats),
         "beats": beats,
     }
+
+
+def _inject_typing_practice_beats(beats: list, entry: Dict) -> list:
+    """
+    Append one TYPING_PRACTICE beat per qualifying code_block, placed
+    just before the RECAP. The code is verbatim from the SOT — never
+    LLM-generated — so the user practices the exact syntax that was
+    in the lesson source.
+
+    Filter rules:
+      - skip blocks shorter than _MIN_TYPING_PRACTICE_CHARS (one-liners
+        aren't useful muscle memory)
+      - dedup byte-identical blocks (a lesson sometimes shows the same
+        snippet twice for different teaching purposes)
+      - cap at 5 practice beats per plan so a code-heavy lesson doesn't
+        balloon a 10-minute Classroom session into 30 minutes of typing
+    """
+    code_blocks = entry.get("code_blocks") or []
+    if not isinstance(code_blocks, list) or not code_blocks:
+        return beats
+
+    seen = set()
+    practice_beats = []
+    for raw in code_blocks:
+        if not isinstance(raw, str):
+            continue
+        code = raw.strip("\n")
+        if len(code.strip()) < _MIN_TYPING_PRACTICE_CHARS:
+            continue
+        key = code.strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        practice_beats.append({
+            "beat_id": f"typing-{len(practice_beats)}-{uuid.uuid4().hex[:6]}",
+            "type": TYPING_PRACTICE,
+            "content": (
+                "Type out this snippet to lock in the syntax. "
+                "Wrong characters won't block you — keep going."
+            ),
+            "code": code,
+        })
+        if len(practice_beats) >= 5:
+            break
+
+    if not practice_beats:
+        return beats
+
+    # Insert before the RECAP beat (the closing summary should still be
+    # the last thing the student sees). If there's no RECAP, append.
+    insert_at = len(beats)
+    for i, b in enumerate(beats):
+        if isinstance(b, dict) and (b.get("type") or "").upper() == "RECAP":
+            insert_at = i
+            break
+    return beats[:insert_at] + practice_beats + beats[insert_at:]
 
 
 # =========================================================

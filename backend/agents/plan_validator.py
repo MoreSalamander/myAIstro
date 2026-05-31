@@ -192,6 +192,19 @@ def validate_plan(
                 errors.append(f"Beat {i} EXAMPLE has no content, explanation, or code")
             if not has_expl:
                 warnings.append(f"Beat {i} EXAMPLE has no explanation")
+        elif t == "TYPING_PRACTICE":
+            # Deterministically-injected beat carrying verbatim code from
+            # the SOT entry's code_blocks. The LLM never authors these —
+            # they're appended by teacher_aide_agent after parse — so
+            # we only need to confirm the payload is shaped right.
+            code = (b.get("code") or "").strip()
+            if not code:
+                errors.append(f"Beat {i} TYPING_PRACTICE has no code")
+            # content is the brief framing string the injector wrote;
+            # warn (not error) if it's missing — the frontend has a
+            # sensible default copy if the beat shows up bare.
+            if not content:
+                warnings.append(f"Beat {i} TYPING_PRACTICE has no framing content")
         else:
             if not content:
                 errors.append(f"Beat {i} ({t}) has empty content")

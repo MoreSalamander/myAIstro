@@ -51,6 +51,10 @@ export const BEAT_TYPES = {
   CHECK: "CHECK",
   RECAP: "RECAP",
   TRANSITION: "TRANSITION",
+  // Deterministically-injected practice beat. Code is verbatim from
+  // the SOT entry's code_blocks (no LLM in the loop). User types it
+  // out for muscle memory; hybrid mode forgives wrong keystrokes.
+  TYPING_PRACTICE: "TYPING_PRACTICE",
 };
 
 export const BEAT_TYPE_LABELS = {
@@ -60,6 +64,7 @@ export const BEAT_TYPE_LABELS = {
   CHECK: "Question",
   RECAP: "Recap",
   TRANSITION: "Transition",
+  TYPING_PRACTICE: "Type it",
 };
 
 // Typewriter speed for chalkboard writing (characters per second)

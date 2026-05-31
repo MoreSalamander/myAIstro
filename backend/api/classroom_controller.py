@@ -112,6 +112,77 @@ def _log(msg: str) -> None:
     print(f"[classroom] {msg}", file=sys.stderr, flush=True)
 
 
+# Lines shorter than this are debris (single words, stray punctuation,
+# residual whitespace after stripping a bullet marker). Lines longer than
+# this are paragraphs, not goal statements — the model can't reliably
+# bind a CHECK question to a 300-character multi-clause passage and the
+# validator's token-sanity check will reject the binding as inconsistent.
+_GOAL_MIN_CHARS = 8
+_GOAL_MAX_CHARS = 300
+
+
+def _normalize_goal_line(line: str) -> str:
+    """
+    Clean one line from a user highlight into a goal-shaped string.
+    Strips leading bullet/number markers ("- ", "* ", "• ", "1. ", "2) ")
+    and surrounding whitespace. Returns "" if the line is empty after
+    cleanup so the caller can drop it.
+    """
+    s = (line or "").strip()
+    if not s:
+        return ""
+    # Strip leading bullet markers — users often highlight bulleted lists.
+    for marker in ("- ", "* ", "• ", "· ", "·"):
+        if s.startswith(marker):
+            s = s[len(marker):].lstrip()
+            break
+    # Strip leading "1. " / "2) " / "10) " numbered list markers.
+    i = 0
+    while i < len(s) and s[i].isdigit():
+        i += 1
+    if i > 0 and i < len(s) and s[i] in ".)" and (i + 1) < len(s) and s[i + 1] == " ":
+        s = s[i + 2 :].lstrip()
+    return s.strip()
+
+
+def _green_highlights_as_goals(green_highlights: list) -> list:
+    """
+    Convert green-highlight records into goal-shaped strings. A single
+    highlight may span multiple lines (the user dragged across a whole
+    recap block) — in that case each non-empty line becomes its own
+    goal. This matches user intent: a 3-bullet recap highlight should
+    produce 3 testable goals, not one 160-character blob the model
+    can't bind a single CHECK to.
+
+    Returns the cleaned list (may be empty). Order preserved by
+    highlight creation order, then by line order within a highlight.
+    """
+    out = []
+    for h in green_highlights:
+        raw = (h.get("text") or "").strip()
+        if not raw:
+            continue
+        for line in raw.splitlines():
+            cleaned = _normalize_goal_line(line)
+            if not cleaned:
+                continue
+            if len(cleaned) < _GOAL_MIN_CHARS:
+                continue
+            if len(cleaned) > _GOAL_MAX_CHARS:
+                # Too long to use as a goal — the model can't bind a
+                # single targeted CHECK to a paragraph. The user can
+                # still see the highlight in the UI; it just doesn't
+                # promote to a mastery goal.
+                _log(
+                    f"skip green-highlight goal: line is {len(cleaned)} chars "
+                    f"(max {_GOAL_MAX_CHARS}). Highlight in smaller pieces "
+                    f"to promote to mastery goals."
+                )
+                continue
+            out.append(cleaned)
+    return out
+
+
 def _merged_mastery_goals(event_id: str, base_goals) -> list:
     """
     Authority hierarchy for mastery goals at Classroom-plan time:
@@ -122,6 +193,10 @@ def _merged_mastery_goals(event_id: str, base_goals) -> list:
     This function unions both, with deterministic goals first (they
     came from the curriculum's own ## Mastery Goals block) and green
     highlights appended after (the user's "I want this tested" mark).
+    Multi-line highlights are split into one goal per line; per-line
+    hygiene (bullet-marker stripping, length filters) keeps weird
+    selections from poisoning the goal list.
+
     Duplicates are removed by case-insensitive stripped text — so a
     user who green-highlights a passage that's already in the canonical
     recap doesn't double-count it.
@@ -146,15 +221,12 @@ def _merged_mastery_goals(event_id: str, base_goals) -> list:
 
     seen = {g.strip().lower() for g in base if isinstance(g, str) and g.strip()}
     merged = list(base)
-    for h in green:
-        text = (h.get("text") or "").strip()
-        if not text:
-            continue
-        key = text.lower()
+    for goal in _green_highlights_as_goals(green):
+        key = goal.lower()
         if key in seen:
             continue
         seen.add(key)
-        merged.append(text)
+        merged.append(goal)
     return merged
 
 

@@ -1,0 +1,9 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {"name":"myAIscene","runtimeExecutable":".claude/start_myaiscene.sh","runtimeArgs":[],"port":8004},
+    {"name":"myAIscript","runtimeExecutable":".claude/start_myaiscript.sh","runtimeArgs":[],"port":8005},
+    {"name":"myAIbeats","runtimeExecutable":".claude/start_myaibeats.sh","runtimeArgs":[],"port":8006},
+    {"name":"buildit","runtimeExecutable":"python3","runtimeArgs":["-m","http.server","8011","--directory","/Users/0ne29/MoreSalamander/buildit-remaster"],"port":8011}
+  ]
+}

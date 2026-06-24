@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>my-AI-stro — turn lessons into a queryable Source of Truth</title>
+<meta name="description" content="A local-first, self-improving knowledge system that captures school lessons into a structured, queryable Source of Truth — LLMs do the capture weeks before the exam; the cold notes are the only allowed aid in an open-book, no-LLM review." />
+<style>
+  :root {
+    --bg:#080d10; --panel:#101820; --line:#1e2c36; --ink:#e6f0f5; --dim:#86a0ad;
+    --accent:#22d3ee; --accent2:#38bdf8; --green:#5bbf8f; --red:#e0556b;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace; --sans:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;} body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.65;-webkit-font-smoothing:antialiased;}
+  a{color:var(--accent);text-decoration:none;} a:hover{text-decoration:underline;}
+  .wrap{max-width:840px;margin:0 auto;padding:0 22px 110px;}
+  header{padding:80px 0 36px;border-bottom:1px solid var(--line);background:radial-gradient(120% 80% at 50% -10%,rgba(34,211,238,.09),transparent 60%);}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);margin-bottom:14px;}
+  h1{font-size:46px;line-height:1.05;margin:0 0 16px;letter-spacing:-1px;font-weight:800;}
+  .lede{font-size:19px;color:var(--dim);max-width:680px;} .lede strong{color:var(--ink);font-weight:600;}
+  .tagline{font-family:var(--mono);color:var(--accent);font-size:14px;letter-spacing:1px;margin-top:20px;}
+  h2{font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);margin:58px 0 6px;}
+  .h2sub{font-size:25px;font-weight:700;margin:0 0 16px;letter-spacing:-.5px;}
+  p{margin:0 0 16px;} .muted{color:var(--dim);} em{color:var(--ink);font-style:normal;border-bottom:1px dashed var(--dim);}
+  .callout{border-left:3px solid var(--accent);background:rgba(34,211,238,.07);border-radius:0 12px 12px 0;padding:16px 20px;margin:22px 0;font-size:16px;} .callout strong{color:var(--ink);}
+  .flow{font-family:var(--mono);font-size:13px;color:var(--dim);background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:20px 0;overflow-x:auto;} .flow b{color:var(--accent);}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0;} @media(max-width:640px){.grid{grid-template-columns:1fr;} h1{font-size:34px;}}
+  .card{border:1px solid var(--line);border-radius:12px;padding:15px 17px;background:var(--panel);} .card h4{margin:0 0 5px;font-size:15px;} .card p{font-size:13.5px;color:var(--dim);margin:0;}
+  footer{margin-top:58px;padding-top:24px;border-top:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--dim);}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="kicker">A MoreSalamander · StudioLabs production</div>
+  <h1>my-AI-stro</h1>
+  <p class="lede">A local-first, self-improving personal knowledge system that turns school lessons into a
+  <strong>queryable Source of Truth</strong> — engineered as notes for an <strong>open-book final review
+  where LLMs are explicitly disallowed</strong>.</p>
+  <div class="tagline">The maestro — it conducts your knowledge.</div>
+</header>
+
+<h2>The story</h2>
+<div class="h2sub">Notes you can carry into a no-LLM exam.</div>
+<p>Final reviews in my program are open-book — you can bring your notes — but using an LLM during the review
+is cheating. The act of writing notes by hand <em>is</em> the studying (the generation effect). So I built a
+system that captures each lesson into a structured Source of Truth weeks before the review, surrounds the LLM
+with deterministic gates to keep the notes honest, and lets me chat with my own notes. The LLM does the
+capture early; the cold artifact I carry in is the notes themselves.</p>
+<div class="callout">
+  <strong>It's also the thing I'm being trained to build.</strong> I'm in school for AI software
+  engineering, so I engineered AI software — the software produces my notes, and the notes are the allowed
+  review aid. The first of the MoreSalamander family, and the one the others are siblings of.
+</div>
+
+<h2>How it works</h2>
+<div class="h2sub">Ingest, ground, query — with judge-separated models.</div>
+<div class="flow">
+  lesson &nbsp;<b>→</b>&nbsp; capture + deterministic gates &nbsp;<b>→</b>&nbsp; Source of Truth &nbsp;<b>→</b>&nbsp; quiz · advisor · graph · chat · Obsidian export
+</div>
+<p>The capture pipeline uses <em>three local models with judge-separation</em> — the model that proposes a
+note is never the one that checks it — so the SOT stays grounded instead of drifting into whatever the model
+felt like saying. Everything is local; the notes are yours and stay on your machine.</p>
+<div class="grid">
+  <div class="card"><h4>Source of Truth</h4><p>Each lesson captured into a structured, queryable record — the spine everything else reads from.</p></div>
+  <div class="card"><h4>Quiz &amp; advisor</h4><p>Self-test against your own notes, and an advisor that points you at what's weak — grounded in the SOT.</p></div>
+  <div class="card"><h4>Knowledge graph</h4><p>The connections between lessons, visualized — see how concepts hang together.</p></div>
+  <div class="card"><h4>Obsidian export</h4><p>Your notes leave as portable Markdown, so the artifact outlives the app.</p></div>
+</div>
+
+<h2>The idea underneath</h2>
+<div class="h2sub">The LLM proposes; deterministic gates keep it honest.</div>
+<p>my-AI-stro is the first instance of the MoreSalamander <em>Deterministic Scaffold</em> thesis: an LLM is a
+powerful but unreliable proposer, so you wrap it in checks that decide what's allowed to become truth. Here
+the stakes are personal — these notes are what you study from, and what you're allowed to bring to the exam,
+so they had better be right.</p>
+
+<footer>
+  my-AI-stro — a MoreSalamander · StudioLabs production. &nbsp;|&nbsp;
+  <a href="https://moresalamander.github.io">The studio ↗</a> &nbsp;·&nbsp;
+  <a href="https://github.com/kroeone29-sys/myAistro">GitHub ↗</a>
+  <br>Built by the engineer learning how to build it.
+</footer>
+</div>
+</body>
+</html>

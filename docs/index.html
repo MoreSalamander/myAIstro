@@ -3,85 +3,152 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>my-AI-stro — turn lessons into a queryable Source of Truth</title>
-<meta name="description" content="A local-first, self-improving knowledge system that captures school lessons into a structured, queryable Source of Truth — LLMs do the capture weeks before the exam; the cold notes are the only allowed aid in an open-book, no-LLM review." />
+<title>my-AI-stro — lessons become a queryable, grounded Source of Truth</title>
+<meta name="description" content="A local-first, self-improving knowledge system. School lessons are captured into a structured Source of Truth, with a deterministic (non-LLM) judge scoring grounding at every write — built as notes for an open-book, no-LLM exam. Watch the grounding gate reject and re-summarize." />
 <style>
   :root {
     --bg:#080d10; --panel:#101820; --line:#1e2c36; --ink:#e6f0f5; --dim:#86a0ad;
-    --accent:#22d3ee; --accent2:#38bdf8; --green:#5bbf8f; --red:#e0556b;
+    --accent:#22d3ee; --amber:#fbbf24; --blue:#38bdf8; --red:#e0556b; --ok:#5bbf8f;
     --mono:ui-monospace,SFMono-Regular,Menlo,monospace; --sans:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
   }
   *{box-sizing:border-box;} body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.65;-webkit-font-smoothing:antialiased;}
   a{color:var(--accent);text-decoration:none;} a:hover{text-decoration:underline;}
-  .wrap{max-width:840px;margin:0 auto;padding:0 22px 110px;}
-  header{padding:80px 0 36px;border-bottom:1px solid var(--line);background:radial-gradient(120% 80% at 50% -10%,rgba(34,211,238,.09),transparent 60%);}
+  .wrap{max-width:880px;margin:0 auto;padding:0 22px 110px;}
+  header{padding:74px 0 34px;border-bottom:1px solid var(--line);background:radial-gradient(120% 80% at 50% -10%,rgba(34,211,238,.10),transparent 60%);}
+  .back{font-family:var(--mono);font-size:12px;color:var(--dim);text-decoration:none;display:inline-block;margin-bottom:16px;}
   .kicker{font-family:var(--mono);font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);margin-bottom:14px;}
-  h1{font-size:46px;line-height:1.05;margin:0 0 16px;letter-spacing:-1px;font-weight:800;}
+  h1{font-size:48px;line-height:1.04;margin:0 0 16px;letter-spacing:-1px;font-weight:800;}
   .lede{font-size:19px;color:var(--dim);max-width:680px;} .lede strong{color:var(--ink);font-weight:600;}
   .tagline{font-family:var(--mono);color:var(--accent);font-size:14px;letter-spacing:1px;margin-top:20px;}
-  h2{font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);margin:58px 0 6px;}
+  h2{font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);margin:60px 0 6px;}
   .h2sub{font-size:25px;font-weight:700;margin:0 0 16px;letter-spacing:-.5px;}
   p{margin:0 0 16px;} .muted{color:var(--dim);} em{color:var(--ink);font-style:normal;border-bottom:1px dashed var(--dim);}
+  code{font-family:var(--mono);font-size:.9em;color:var(--amber);}
+  .runner{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px 22px 20px;margin:22px 0;}
+  .runbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;}
+  .runbar .t{font-family:var(--mono);font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--dim);}
+  .attempt{font-family:var(--mono);font-size:12px;color:var(--dim);} .attempt b{color:var(--accent);}
+  .track{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;}
+  .stage{flex:1;min-width:88px;border:1px solid var(--line);border-radius:10px;background:#0b1218;padding:11px 8px;text-align:center;transition:all .3s ease;}
+  .stage .sn{font-family:var(--mono);font-size:11px;color:var(--dim);transition:color .3s;}
+  .stage .sg{font-size:10px;font-family:var(--mono);color:#40555f;margin-top:3px;height:13px;}
+  .stage.active{border-color:var(--accent);background:rgba(34,211,238,.10);box-shadow:0 0 22px -6px var(--accent);}
+  .stage.active .sn{color:var(--ink);}
+  .stage.pass{border-color:var(--ok);} .stage.pass .sg{color:var(--ok);}
+  .stage.fail{border-color:var(--red);background:rgba(224,85,107,.10);} .stage.fail .sg{color:var(--red);} .stage.fail .sn{color:#f4b9c4;}
+  .arrow{display:flex;align-items:center;color:#2c4049;font-size:15px;padding:0 4px;}
+  .console{margin-top:16px;background:#060b0e;border:1px solid var(--line);border-radius:10px;padding:13px 15px;font-family:var(--mono);font-size:12px;line-height:1.85;height:150px;overflow:hidden;}
+  .console .ln{white-space:nowrap;} .console .ev{color:var(--dim);} .console .k{color:var(--blue);}
+  .console .pass{color:var(--ok);} .console .fail{color:var(--red);} .console .done{color:var(--amber);}
+  .scorebar{display:flex;align-items:center;gap:12px;margin-top:14px;font-family:var(--mono);font-size:12px;}
+  .meter{flex:1;height:8px;background:#0b1218;border:1px solid var(--line);border-radius:6px;overflow:hidden;}
+  .meter .fill{height:100%;width:0;background:var(--red);transition:width .6s ease,background .4s;}
+  .scoreval{min-width:130px;text-align:right;color:var(--dim);} .scoreval b{font-size:14px;}
+  .caption{font-size:12.5px;color:var(--dim);margin-top:14px;line-height:1.5;}
+  .moves{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0;}
+  .move{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;}
+  .move .num{font-family:var(--mono);font-size:11px;letter-spacing:1px;text-transform:uppercase;margin-bottom:7px;font-weight:700;}
+  .move.e .num{color:var(--amber);} .move.s .num{color:var(--accent);} .move.v .num{color:var(--ok);}
+  .move p{font-size:13.5px;color:var(--dim);margin:0;line-height:1.55;} .move p b{color:var(--ink);font-weight:600;}
   .callout{border-left:3px solid var(--accent);background:rgba(34,211,238,.07);border-radius:0 12px 12px 0;padding:16px 20px;margin:22px 0;font-size:16px;} .callout strong{color:var(--ink);}
-  .flow{font-family:var(--mono);font-size:13px;color:var(--dim);background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:20px 0;overflow-x:auto;} .flow b{color:var(--accent);}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0;} @media(max-width:640px){.grid{grid-template-columns:1fr;} h1{font-size:34px;}}
-  .card{border:1px solid var(--line);border-radius:12px;padding:15px 17px;background:var(--panel);} .card h4{margin:0 0 5px;font-size:15px;} .card p{font-size:13.5px;color:var(--dim);margin:0;}
   footer{margin-top:58px;padding-top:24px;border-top:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--dim);}
+  @media(max-width:640px){h1{font-size:34px;} .moves{grid-template-columns:1fr;} .arrow{display:none;} .stage{min-width:44%;}}
 </style>
 </head>
 <body>
 <div class="wrap">
+
 <header>
-  <a href="https://moresalamander.github.io" style="font-family:var(--mono);font-size:12px;color:var(--dim);text-decoration:none;display:inline-block;margin-bottom:16px">&larr; the studio</a>
+  <a class="back" href="https://moresalamander.github.io">&larr; the studio</a>
   <div class="kicker">A MoreSalamander · StudioLabs production</div>
   <h1>my-AI-stro</h1>
-  <p class="lede">A local-first, self-improving personal knowledge system that turns school lessons into a
-  <strong>queryable Source of Truth</strong> — engineered as notes for an <strong>open-book final review
-  where LLMs are explicitly disallowed</strong>.</p>
+  <p class="lede">A local-first, self-improving knowledge system that turns school lessons into a
+  <strong>queryable Source of Truth</strong> — engineered as notes for an <strong>open-book exam where
+  LLMs are disallowed</strong>. The AI does the capture weeks early; the cold notes are the only aid you
+  carry in.</p>
   <div class="tagline">The maestro — it conducts your knowledge.</div>
 </header>
 
-<h2>The story</h2>
-<div class="h2sub">Notes you can carry into a no-LLM exam.</div>
-<p>Final reviews in my program are open-book — you can bring your notes — but using an LLM during the review
-is cheating. The act of writing notes by hand <em>is</em> the studying (the generation effect). So I built a
-system that captures each lesson into a structured Source of Truth weeks before the review, surrounds the LLM
-with deterministic gates to keep the notes honest, and lets me chat with my own notes. The LLM does the
-capture early; the cold artifact I carry in is the notes themselves.</p>
-<div class="callout">
-  <strong>It's also the thing I'm being trained to build.</strong> I'm in school for AI software
-  engineering, so I engineered AI software — the software produces my notes, and the notes are the allowed
-  review aid. The first of the MoreSalamander family, and the one the others are siblings of.
+<h2>What it is</h2>
+<div class="h2sub">Notes you can trust, because a judge keeps them grounded.</div>
+<p>A study tool that hallucinates is worse than none — so my-AI-stro makes verification a <em>system
+property</em>: every lesson is captured into a structured SOT, and a <strong>deterministic (non-LLM)
+judge</strong> scores grounding at every write. The crowning jewel of the MoreSalamander methodology — the
+reference implementation a stranger can read to understand what the thesis means in practice.</p>
+
+<h2>Watch it run</h2>
+<div class="h2sub">A model summarizes a lesson; a judge refuses anything ungrounded.</div>
+<div class="runner" id="runner">
+  <div class="runbar"><span class="t">my-AI-stro · ingestion pipeline</span><span class="attempt">attempt <b id="att">1</b></span></div>
+  <div class="track" id="track">
+    <div class="stage" data-s="graph_entry"><div class="sn">graph_entry</div><div class="sg"></div></div><div class="arrow">→</div>
+    <div class="stage" data-s="retrieval"><div class="sn">retrieval</div><div class="sg"></div></div><div class="arrow">→</div>
+    <div class="stage" data-s="summarization"><div class="sn">summarize</div><div class="sg"></div></div><div class="arrow">→</div>
+    <div class="stage" data-s="validation"><div class="sn">validation</div><div class="sg">judge ●</div></div><div class="arrow">→</div>
+    <div class="stage" data-s="memory_write"><div class="sn">memory_write</div><div class="sg"></div></div>
+  </div>
+  <div class="scorebar"><span>grounding</span><div class="meter"><div class="fill" id="fill"></div></div><span class="scoreval" id="sv">— /100 · need ≥ 75</span></div>
+  <div class="console" id="console"></div>
+  <div class="caption">The <strong>validation judge ●</strong> is deterministic, formula-based — <strong>not an
+  LLM</strong>, because the grader can't be the thing it grades. Ungrounded entries are rejected and
+  re-summarized before anything reaches the SOT. <span class="muted">(Two more pipelines — advisor and
+  Classroom — run on the same event vocabulary.)</span></div>
 </div>
 
-<h2>How it works</h2>
-<div class="h2sub">Ingest, ground, query — with judge-separated models.</div>
-<div class="flow">
-  lesson &nbsp;<b>→</b>&nbsp; capture + deterministic gates &nbsp;<b>→</b>&nbsp; Source of Truth &nbsp;<b>→</b>&nbsp; quiz · advisor · graph · chat · Obsidian export
-</div>
-<p>The capture pipeline uses <em>three local models with judge-separation</em> — the model that proposes a
-note is never the one that checks it — so the SOT stays grounded instead of drifting into whatever the model
-felt like saying. Everything is local; the notes are yours and stay on your machine.</p>
-<div class="grid">
-  <div class="card"><h4>Source of Truth</h4><p>Each lesson captured into a structured, queryable record — the spine everything else reads from.</p></div>
-  <div class="card"><h4>Quiz &amp; advisor</h4><p>Self-test against your own notes, and an advisor that points you at what's weak — grounded in the SOT.</p></div>
-  <div class="card"><h4>Knowledge graph</h4><p>The connections between lessons, visualized — see how concepts hang together.</p></div>
-  <div class="card"><h4>Obsidian export</h4><p>Your notes leave as portable Markdown, so the artifact outlives the app.</p></div>
+<h2>The three moves</h2>
+<div class="h2sub">Explain · Synthesize · Verify — at every persistence boundary.</div>
+<div class="moves">
+  <div class="move e"><div class="num">01 · Explain</div><p>The lesson, the <b>SOT schema</b>, and the grounding criteria the judge will apply — written down first. Trust isolation is part of the doctrine: the model that owns the SOT never handles ungrounded chat.</p></div>
+  <div class="move s"><div class="num">02 · Synthesize</div><p>A local model (<code>llama3:8b</code>) summarizes the lesson into structured SOT entries; retrieval pulls related prior entries so the new entry fits what's already known.</p></div>
+  <div class="move v"><div class="num">03 · Verify</div><p>A <b>deterministic, formula-based judge</b> scores grounding against the source and rejects ungrounded entries. A background <b>audit loop</b> keeps rotating canonical entries toward more-grounded versions over time.</p></div>
 </div>
 
-<h2>The idea underneath</h2>
-<div class="h2sub">The LLM proposes; deterministic gates keep it honest.</div>
-<p>my-AI-stro is the first instance of the MoreSalamander <em>Deterministic Scaffold</em> thesis: an LLM is a
-powerful but unreliable proposer, so you wrap it in checks that decide what's allowed to become truth. Here
-the stakes are personal — these notes are what you study from, and what you're allowed to bring to the exam,
-so they had better be right.</p>
+<h2>Best at — and the honest limit</h2>
+<div class="h2sub">Your knowledge, grounded — and queryable.</div>
+<p>my-AI-stro runs a full curation chain (Ingest → SOT → Chat → Notebook → Classroom), each boundary
+Python-verified, with three coexisting pipelines on one shared NDJSON event vocabulary and a gradebook that
+extends verification into learning analytics. Everything local; the notes are yours and stay on your machine.</p>
+<div class="callout"><strong>What it can't do:</strong> the judge verifies that an entry is <em>grounded in
+your source material</em> — not that the source was right, and not that it's a general-purpose oracle. It's
+your notes, kept honest — deliberately not a chatbot that answers from thin air.</div>
 
 <footer>
   my-AI-stro — a MoreSalamander · StudioLabs production. &nbsp;|&nbsp;
   <a href="https://moresalamander.github.io">The studio ↗</a> &nbsp;·&nbsp;
+  <a href="https://moresalamander.github.io/projects.html">All projects ↗</a> &nbsp;·&nbsp;
   <a href="https://github.com/MoreSalamander/myAIstro">GitHub ↗</a>
   <br>Built by the engineer learning how to build it.
 </footer>
 </div>
+
+<script>
+(function(){
+  const stages=[...document.querySelectorAll('.stage')], byId=id=>stages.find(s=>s.dataset.s===id);
+  const con=document.getElementById('console'),fill=document.getElementById('fill'),sv=document.getElementById('sv'),att=document.getElementById('att');
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  const reduced=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const F=reduced?0.12:1;
+  function clear(){stages.forEach(s=>s.classList.remove('active','pass','fail'));}
+  function log(t,c){const l=document.createElement('div');l.className='ln';l.innerHTML='<span class="ev">'+t+'</span>';if(c)l.querySelector('.ev').className=c;con.appendChild(l);while(con.children.length>7)con.removeChild(con.firstChild);}
+  function score(v,ok){fill.style.width=Math.min(v,100)+'%';fill.style.background=ok?'var(--ok)':'var(--red)';sv.innerHTML='<b style="color:'+(ok?'var(--ok)':'var(--red)')+'">'+v+'</b> /100 · need ≥ 75';}
+  async function run(id,note){clear();byId(id).classList.add('active');log('<span class="k">step_start</span> '+id);await sleep(560*F);if(note)log('<span class="k">'+note+'</span>');log('<span class="k">step_complete</span> '+id);await sleep(340*F);}
+  async function gate(id,ok,note){clear();const el=byId(id);el.classList.add('active');log('<span class="k">gate_check</span> '+id);await sleep(680*F);el.classList.remove('active');el.classList.add(ok?'pass':'fail');el.querySelector('.sg').textContent=ok?'pass ✓':'fail ✕';log((ok?'gate_pass ':'gate_fail ')+id+(note?' · '+note:''),ok?'pass':'fail');await sleep(760*F);}
+  function reset(n){con.innerHTML='';clear();stages.forEach(s=>{const g=s.querySelector('.sg');g.textContent=(s.dataset.s==='validation')?'judge ●':'';});att.textContent=n;sv.innerHTML='— /100 · need ≥ 75';fill.style.width='0';}
+  async function loop(){while(true){
+    reset(1);await sleep(500*F);
+    await run('graph_entry','lesson in');
+    await run('retrieval','related SOT entries');
+    await run('summarization','llama3:8b summarizes');
+    score(58,false);await gate('validation',false,'grounding 58 — ungrounded claim');
+    log('retry ↺ re-summarize','fail');await sleep(1100*F);
+    reset(2);await sleep(380*F);
+    await run('summarization','re-summarize, drop ungrounded');
+    score(91,true);await gate('validation',true,'grounding 91');
+    clear();byId('memory_write').classList.add('active','pass');byId('memory_write').querySelector('.sg').textContent='✓ written';
+    log('<span class="done">done</span> memory_write → SOT');await sleep(3200*F);
+  }}
+  loop();
+})();
+</script>
 </body>
 </html>
